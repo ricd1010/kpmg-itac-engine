@@ -212,9 +212,9 @@ header_html = f"""
 <div style="background-color: {KPMG_BLUE}; padding: 3rem 4rem; border-radius: 16px; margin: 1rem 1rem 2rem 1rem; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 8px 24px rgba(0,51,141,0.2);">
     <div style="display: flex; align-items: center;">
         <img src="data:image/png;base64,{logo_b64}" style="height: 65px; margin-right: 35px;">
-        <div style="color: white;">
-            <span style="color: #FFFFFF !important; font-size: 32px !important; font-weight: 800; display: block; margin-bottom: 6px; line-height: 1.2;">ITAC 自动化底稿生成中心</span>
-            <p style="margin: 0 !important; font-size: 16px; opacity: 0.85; color: #FFFFFF !important; font-weight: 500;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>
+        <div style="color: white; display: flex; flex-direction: column; justify-content: center;">
+            <span style="color: #FFFFFF !important; font-size: 42px !important; font-weight: 800; display: block; margin-bottom: 2px; line-height: 1.1;">ITAC 自动化底稿生成中心</span>
+            <p style="margin: 0 !important; font-size: 17px; opacity: 0.85; color: #FFFFFF !important; font-weight: 500;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>
         </div>
     </div>
     <div style="text-align: right; color: white;">
