@@ -54,24 +54,32 @@ st.markdown(f"""
         background-color: {KPMG_LIGHT_GREY} !important;
     }}
     
+    /* Force Full Screen Width and Remove Margins */
     .main .block-container {{
-        background-color: {KPMG_LIGHT_GREY} !important;
-        padding-top: 0rem !important;
-        padding-bottom: 0rem !important;
-        padding-left: 0rem !important;
-        padding-right: 0rem !important;
-        max-width: 100% !important;
-        width: 100% !important;
-    }}
-
-    [data-testid="stAppViewBlockContainer"] {{
-        max-width: 100% !important;
-        padding: 0rem !important;
+        max-width: 100vw !important;
+        padding: 0px !important;
+        margin: 0px !important;
+        width: 100vw !important;
     }}
     
+    [data-testid="stAppViewBlockContainer"] {{
+        max-width: 100vw !important;
+        padding: 0px !important;
+        margin: 0px !important;
+        width: 100vw !important;
+    }}
+
     [data-testid="stHeader"] {{
-        background: rgba(0,0,0,0) !important;
-        color: white !important;
+        display: none !important;
+    }}
+    
+    footer {{
+        display: none !important;
+    }}
+
+    /* Remove top padding for the first element */
+    [data-testid="stAppViewContainer"] {{
+        padding: 0px !important;
     }}
 
     
