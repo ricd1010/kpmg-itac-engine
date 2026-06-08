@@ -54,9 +54,19 @@ st.markdown(f"""
         background-color: {KPMG_LIGHT_GREY} !important;
     }}
     
-    .main .block-container {{
+    .main .block-container {
         background-color: {KPMG_LIGHT_GREY} !important;
-    }}
+        padding-top: 0rem !important;
+        padding-bottom: 0rem !important;
+        padding-left: 0rem !important;
+        padding-right: 0rem !important;
+        max-width: 100% !important;
+    }
+
+    [data-testid="stAppViewContainer"] > section:nth-child(2) > div:nth-child(1) {
+        padding: 0 !important;
+    }
+
     
     [data-testid="stSidebar"] {{
         background-color: {KPMG_BLUE} !important;
