@@ -56,17 +56,13 @@ st.markdown(f"""
     
     /* Full Screen Width with Consistent Alignment Padding */
     .main .block-container {{
-        max-width: 100vw !important;
-        padding: 1.5rem 2rem 2rem 2rem !important;
-        margin: 0px !important;
-        width: 100vw !important;
+        max-width: 100% !important;
+        padding: 2rem 3rem !important;
     }}
     
     [data-testid="stAppViewBlockContainer"] {{
-        max-width: 100vw !important;
-        padding: 1.5rem 2rem 2rem 2rem !important;
-        margin: 0px !important;
-        width: 100vw !important;
+        max-width: 100% !important;
+        padding: 2rem 3rem !important;
     }}
 
     [data-testid="stHeader"] {{
@@ -245,7 +241,7 @@ header_html = f"""
             <p style="margin: 0 !important; font-size: 17px; opacity: 0.85; color: #FFFFFF !important; font-weight: 500;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>
         </div>
     </div>
-    <div style="text-align: right; color: white;">
+    <div style="text-align: right; color: white; transform: translateY(-12px);">
         <div style="font-size: 14px; font-weight: 600; letter-spacing: 1px;">SYSTEM ONLINE</div>
         <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">Session Tracking: {st.session_state.session_id[:12].upper()}</div>
     </div>
