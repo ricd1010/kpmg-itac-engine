@@ -257,13 +257,13 @@ logo_b64 = get_base64_image(logo_path)
 header_html = f"""
 <div style="background-color: {KPMG_BLUE}; padding: 3rem 4rem; border-radius: 16px; margin: 0 0 2rem 0; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 8px 24px rgba(0,51,141,0.2);">
     <div style="display: flex; align-items: center;">
-        <img src="data:image/png;base64,{logo_b64}" style="height: 65px; margin-right: 35px; transform: translateY(-5px);">
-        <div style="display: flex; flex-direction: column; justify-content: center; transform: translateY(8px);">
+        <img src="data:image/png;base64,{logo_b64}" style="height: 65px; margin-right: 35px; transform: translateY(-2px);">
+        <div style="display: flex; flex-direction: column; justify-content: center;">
             <span class="kpmg-main-title">ITAC 自动化底稿生成中心</span>
             <span class="kpmg-sub-title">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威IT Audit</span>
         </div>
     </div>
-    <div style="text-align: right; color: white; transform: translateY(-12px);">
+    <div style="text-align: right; color: white;">
         <div style="font-size: 14px; font-weight: 600; letter-spacing: 1px;">SYSTEM ONLINE</div>
         <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">Session Tracking: {st.session_state.session_id[:12].upper()}</div>
     </div>
