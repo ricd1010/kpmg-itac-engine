@@ -54,18 +54,18 @@ st.markdown(f"""
         background-color: {KPMG_LIGHT_GREY} !important;
     }}
     
-    .main .block-container {
+    .main .block-container {{
         background-color: {KPMG_LIGHT_GREY} !important;
         padding-top: 0rem !important;
         padding-bottom: 0rem !important;
         padding-left: 0rem !important;
         padding-right: 0rem !important;
         max-width: 100% !important;
-    }
+    }}
 
-    [data-testid="stAppViewContainer"] > section:nth-child(2) > div:nth-child(1) {
+    [data-testid="stAppViewContainer"] > section:nth-child(2) > div:nth-child(1) {{
         padding: 0 !important;
-    }
+    }}
 
     
     [data-testid="stSidebar"] {{
@@ -309,9 +309,11 @@ elif st.session_state.current_step == 3:
                     with st.status(f"🚀 解析: {img.name}...") as status:
                         img_bytes = img.getvalue()
                         llm_c = None
-                        if deepseek_api_key:
+                        # Use DEFAULT_KEY if available
+                        effective_key = DEFAULT_KEY
+                        if effective_key:
                             from llm_client import LLMClient
-                            llm_c = LLMClient(api_key=deepseek_api_key, model_name=selected_model)
+                            llm_c = LLMClient(api_key=effective_key, model_name=selected_model)
                         res = st.session_state.ocr_engine_inst.process_and_parse(img_bytes, llm_client=llm_c)
                         if "items" in res:
                             for it in res["items"]:
@@ -353,10 +355,10 @@ elif st.session_state.current_step == 3:
                     st.warning(f"⚠️ 核心引擎警告: 未能匹配到任何活跃的审计场景。请检查上传清单的内容。")
                 
                 c2 = Core2Orchestrator(SESSION_DATA_DIR)
-                if deepseek_api_key:
+                # Use DEFAULT_KEY
+                if DEFAULT_KEY:
                     from llm_client import LLMClient
-                    # 确保 Core2 使用用户输入的真实 API Key
-                    c2.llm_client = LLMClient(api_key=deepseek_api_key, model_name=selected_model)
+                    c2.llm_client = LLMClient(api_key=DEFAULT_KEY, model_name=selected_model)
                 
                 di = c2.generate_di_descriptions(ranked, st.session_state.audit_context)
                 
