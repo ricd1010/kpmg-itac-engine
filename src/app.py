@@ -304,8 +304,19 @@ if st.session_state.results:
         st.subheader("识别场景与重要性排序")
         if res["ranked"]:
             df_ranked = pd.DataFrame(res["ranked"])
-            df_ranked["accounts_display"] = df_ranked["accounts"].apply(lambda x: "\n".join(x))
-            st.dataframe(df_ranked[["name", "total_value", "accounts_display"]].rename(columns={"name": "审计场景", "total_value": "涉及金额", "accounts_display": "关联科目"}), use_container_width=True)
+            # Keep accounts as a list for native ListColumn support
+            df_ranked["accounts_display"] = df_ranked["accounts"]
+            st.dataframe(
+                df_ranked[["name", "total_value", "accounts_display"]].rename(columns={"name": "审计场景", "total_value": "涉及金额", "accounts_display": "关联科目"}), 
+                use_container_width=True,
+                column_config={
+                    "关联科目": st.column_config.ListColumn(
+                        "关联科目",
+                        help="映射到此场景的所有会计科目",
+                        width="large",
+                    )
+                }
+            )
     with t2:
         st.subheader("TOD/TOE 穿行测试描述")
         for it in res["di"]:
