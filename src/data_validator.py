@@ -187,7 +187,9 @@ class DataValidator:
             "DOC_NUM": ["doc_num", "凭证号", "会计凭证"],
             "DATE": ["date", "日期", "过账日期"],
             "AMOUNT": ["amount", "金额", "交易金额"],
-            "SHKZG": ["shkzg", "借/贷标识", "S/H"]
+            "SHKZG": ["shkzg", "借/贷标识", "S/H"],
+            "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
+            "KOMOK": ["komok", "科目修改", "修改码"]
         }
         final_names = {}
         used_indices = set()
