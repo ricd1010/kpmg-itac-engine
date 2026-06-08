@@ -195,7 +195,7 @@ st.markdown(header_html, unsafe_allow_html=True)
 c1, c2 = st.columns([3, 1])
 with c1:
     if st.session_state.api_key_valid:
-        st.success("🤖 DeepSeek AI 审计助手已就绪")
+        st.success("🤖 已成功部署DeepSeek API")
     else:
         st.warning("⚠️ 基础分析模式 (Mock Mode)")
 with c2:
