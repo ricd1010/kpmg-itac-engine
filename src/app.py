@@ -221,15 +221,13 @@ if st.session_state.results:
             with st.expander(f"📌 {it['scenario']}"):
                 st.info(it["di_description"]); st.write("**样本细节记录 (TOE):**"); st.json(it["sample_table"])
     with t3:
-        st.markdown('<div class="audit-card">', unsafe_allow_html=True)
-        st.subheader("最终成果文件导出")
+            st.subheader("最终成果文件导出")
         with open(res["report_path"], "rb") as f:
             st.download_button(label="📥 下载最终 Excel 审计底稿", data=f.read(), file_name=f"ITAC_WP_{st.session_state.audit_context.get('entity_name','Audit')}.xlsx", use_container_width=True)
         st.write("") 
         if st.button("🔄 开启新的审计任务", use_container_width=True):
             st.session_state.current_step = 1; st.session_state.results = None; st.session_state.ocr_samples = []; st.session_state.processed_image_names = set(); st.session_state.show_balloons = False; st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.write("---"); st.caption("© 2026 KPMG. All rights reserved. | IT Audit Technology & Innovation")
+        st.write("---"); st.caption("© 2026 KPMG. All rights reserved. | IT Audit Technology & Innovation")
     st.stop()
 
 # Progress
@@ -239,7 +237,6 @@ st.progress(st.session_state.current_step / 3.0)
 
 # --- STEP 1 ---
 if st.session_state.current_step == 1:
-    st.markdown('<div class="audit-card">', unsafe_allow_html=True)
     st.subheader("步骤 1: 设置审计背景信息")
     with st.form("step1_form"):
         c1, c2 = st.columns(2)
@@ -257,11 +254,9 @@ if st.session_state.current_step == 1:
                     st.session_state.audit_context = {"entity_name": entity_name, "system_name": system_name, "period_start": str(period_start), "period_end": str(period_end)}
                     st.session_state.current_step = 2; st.rerun()
                 else: st.error("❗ 请完整填写背景信息。")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 # --- STEP 2 ---
 elif st.session_state.current_step == 2:
-    st.markdown('<div class="audit-card">', unsafe_allow_html=True)
     st.subheader("步骤 2: 上传基础数据表 (T030, SKAT, 余额表)")
     u1, u2, u3 = st.columns(3)
     with u1: t030_file = st.file_uploader("T030 配置表", type=["csv", "xlsx", "xls"])
@@ -283,7 +278,6 @@ elif st.session_state.current_step == 2:
                         df.to_csv(os.path.join(SESSION_DATA_DIR, f"{f_t}.csv"), index=False, encoding='utf-8-sig')
                     if all_v: st.session_state.current_step = 3; st.rerun()
             else: st.warning("❗ 请上传全部表格。")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 # --- STEP 3 ---
 elif st.session_state.current_step == 3:
@@ -291,7 +285,6 @@ elif st.session_state.current_step == 3:
         with st.status("🏗️ 初始化本地 OCR 引擎..."):
             from ocr_processor import OCRProcessor
             st.session_state.ocr_engine_inst = OCRProcessor()
-    st.markdown('<div class="audit-card">', unsafe_allow_html=True)
     st.subheader("步骤 3: 采集审计样本证据")
     s1, s2 = st.columns(2)
     with s1: samples_file = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"])
@@ -363,7 +356,6 @@ elif st.session_state.current_step == 3:
                     gen = ReportGenerator(SESSION_DATA_DIR); path = gen.generate(ranked, di, st.session_state.audit_context)
                     st.session_state.results = {"ranked": ranked, "di": di, "report_path": path}
                     st.session_state.show_balloons = True; st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
 st.write("---")
 st.caption("© 2026 KPMG. All rights reserved. | IT Audit Technology & Innovation")
