@@ -171,6 +171,17 @@ st.markdown(f"""
         font-weight: 600 !important;
         color: {KPMG_BLUE} !important;
     }}
+
+    /* Vertical Centering for Toolbar Elements */
+    [data-testid="column"] {{
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+    }}
+    
+    .stSelectbox {{
+        margin-top: -15px !important; /* Counter-act default label space even when collapsed */
+    }}
     </style>
     """, unsafe_allow_html=True)
 
