@@ -145,6 +145,23 @@ st.markdown(f"""
     }}
     
     .stAlert {{ background-color: white !important; color: {KPMG_DARK_GREY} !important; }}
+
+    /* Centering the Spinner */
+    [data-testid="stSpinner"] {{
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100% !important;
+        margin-top: 2rem !important;
+        margin-bottom: 2rem !important;
+    }}
+    [data-testid="stSpinner"] > div {{
+        width: 100% !important;
+        text-align: center !important;
+        font-size: 1.2rem !important;
+        font-weight: 600 !important;
+        color: {KPMG_BLUE} !important;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
