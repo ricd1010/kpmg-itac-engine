@@ -4,7 +4,7 @@ from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
 
 def run_full_pipeline():
-    data_dir = r"C:\Users\Laptop\.gemini\tmp\system32\AuditHackathon\data"
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
     
     print(">>> 正在启动 ITAC 自动化底稿生成引擎...")
     

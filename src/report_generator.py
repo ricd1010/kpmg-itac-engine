@@ -14,7 +14,7 @@ class ReportGenerator:
         
         # 1. Summary Sheet
         ws_summary = wb.active
-        ws_summary.title = "测试汇总"
+        ws_summary.title = "审计总览"
         
         # Style Definitions
         kpmg_blue_fill = PatternFill(start_color="00338D", end_color="00338D", fill_type="solid")
@@ -24,12 +24,12 @@ class ReportGenerator:
 
         # Title
         ws_summary.merge_cells("A1:E1")
-        ws_summary["A1"] = "自动化控制 (ITAC) 测试汇总表"
+        ws_summary["A1"] = "自动化控制 (ITAC) 审计测试总览表"
         ws_summary["A1"].font = Font(size=16, bold=True, color="00338D")
         ws_summary["A1"].alignment = align_center
 
         # Headers
-        table_headers = ["控制编号", "控制描述 / 审计场景", "风险等级", "涉及交易规模", "审计结论"]
+        table_headers = ["控制编号", "审计场景 / 流程活动", "控制属性", "涉及金额 (本年余额)", "审计穿行结论"]
         ws_summary.append(table_headers)
         for cell in ws_summary[ws_summary.max_row]:
             cell.font = header_font
@@ -47,8 +47,8 @@ class ReportGenerator:
         for res in ranked_scenarios:
             name = res['name']
             samples = di_map.get(name, [])
-            conclusion = f"测试满意 ({len(samples)}个样本)" if samples else "未执行测试"
-            row = ["ITAC_CTRL", name, "High", f"{res['total_value']:,.2f}", conclusion]
+            conclusion = f"通过 ({len(samples)}个样本)" if samples else "未匹配到样本"
+            row = ["ITAC_CTRL", name, "Automated", f"{res['total_value']:,.2f}", conclusion]
             ws_summary.append(row)
             for cell in ws_summary[ws_summary.max_row]:
                 cell.border = thin_border
@@ -57,6 +57,21 @@ class ReportGenerator:
         ws_summary.column_dimensions['B'].width = 50
         ws_summary.column_dimensions['D'].width = 20
         ws_summary.column_dimensions['E'].width = 25
+
+        # 1.5 WGLL Sheet (Methodology)
+        ws_wgll = wb.create_sheet("方法论与较佳实践 (WGLL)")
+        ws_wgll["A1"] = "毕马威 ITAC 审计方法论指导"
+        ws_wgll["A1"].font = Font(size=14, bold=True)
+        guidelines = [
+            "1. ITAC (Information Technology Application Controls) 是嵌入在 ERP 系统中的自动化控制。",
+            "2. 本工具通过解析 T030 等配置表，识别 SAP 系统中预设的自动记账逻辑。",
+            "3. 场景识别基于会计科目与业务流程的映射（Mapping）。",
+            "4. 穿行测试描述（D&I）由 AI 根据识别出的具体凭证行项目自动撰写。",
+            "5. 审计人员应核对 AI 生成的描述是否与企业的实际 IPE（信息产生的流程）一致。"
+        ]
+        for i, text in enumerate(guidelines):
+            ws_wgll.cell(row=i+3, column=1, value=text)
+        ws_wgll.column_dimensions['A'].width = 100
 
         # 2. Detailed D&I Sheets (Based on Standard Template)
         for scenario_name, results in di_map.items():

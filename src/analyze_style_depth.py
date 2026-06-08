@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import openpyxl
 
@@ -18,5 +19,5 @@ def analyze_template_style(path):
         print(f"Row {row:2}: {' '.join(row_data)}")
 
 if __name__ == "__main__":
-    path = r"C:\Users\Laptop\Downloads\【2026】ITAC_P2P_02 采购收货入应付暂估会计凭证.xlsx"
+    path = "【2026】ITAC_P2P_02 采购收货入应付暂估会计凭证.xlsx"
     analyze_template_style(path)

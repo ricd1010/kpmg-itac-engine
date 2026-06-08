@@ -5,6 +5,7 @@ import datetime
 import re
 import base64
 import time
+import uuid
 from core1_main import Core1Orchestrator
 from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
@@ -37,29 +38,32 @@ def get_ocr_engine():
     from ocr_processor import OCRProcessor
     return OCRProcessor()
 
-# Custom KPMG Styling
+# Custom KPMG Styling - Forced Professional Contrast (Dark Mode Compatibility)
 st.markdown(f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap');
-    html, body, [class*="css"] {{
+    
+    html, body, [class*="css"], .stApp {{
         font-family: 'Open Sans', sans-serif !important;
         font-size: 16px !important;
-        color: {KPMG_DARK_GREY};
+        color: {KPMG_DARK_GREY} !important;
+        background-color: {KPMG_LIGHT_GREY} !important;
     }}
-    .main {{ background-color: {KPMG_LIGHT_GREY}; }}
     
-    /* Sidebar styling */
+    .main .block-container {{
+        background-color: {KPMG_LIGHT_GREY} !important;
+    }}
+    
     [data-testid="stSidebar"] {{
-        background-color: {KPMG_BLUE};
+        background-color: {KPMG_BLUE} !important;
         padding-top: 0.1rem !important;
     }}
-    [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stText {{
+    [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stText, [data-testid="stSidebar"] p {{
         color: white !important;
         font-size: 15px !important;
         font-weight: 600 !important;
     }}
     
-    /* Center MASSIVE logo in sidebar */
     .logo-container {{
         display: flex;
         justify-content: center;
@@ -69,22 +73,21 @@ st.markdown(f"""
         margin-top: 0.5rem;
     }}
     .massive-logo {{
-        width: 400px !important;
-        max-width: none !important;
+        width: 320px !important;
         display: block;
         margin: 0 auto;
     }}
 
     .audit-card {{
-        background-color: white;
+        background-color: white !important;
         padding: 2.5rem;
         border-radius: 8px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         border-top: 6px solid {KPMG_BLUE};
         margin-bottom: 2rem;
+        color: {KPMG_DARK_GREY} !important;
     }}
     
-    /* Centered Button Styling: Official KPMG Blue */
     .stButton>button {{
         background-color: {KPMG_BLUE} !important;
         color: white !important;
@@ -106,17 +109,21 @@ st.markdown(f"""
     }}
     
     h1 {{ color: {KPMG_BLUE} !important; font-size: 38px !important; font-weight: 800 !important; margin-bottom: 0px !important;}}
-    .sub-caption {{ color: {KPMG_DARK_GREY}; font-size: 22px; font-weight: 500; margin-top: 5px !important; }}
-    h2 {{ color: {KPMG_BLUE} !important; font-size: 26px !important; font-weight: 700 !important; border-bottom: 2px solid {KPMG_TEAL}; padding-bottom: 12px; }}
+    .sub-caption {{ color: {KPMG_DARK_GREY} !important; font-size: 22px; font-weight: 500; margin-top: 5px !important; }}
+    h2, h3 {{ color: {KPMG_BLUE} !important; font-size: 26px !important; font-weight: 700 !important; border-bottom: 2px solid {KPMG_TEAL}; padding-bottom: 12px; }}
+    
+    label p {{ color: {KPMG_DARK_GREY} !important; font-weight: 600 !important; }}
     
     .sidebar-footer {{
         position: fixed;
         bottom: 25px;
         left: 20px;
-        color: rgba(255,255,255,0.6) !important;
+        color: rgba(255,255,255,0.8) !important;
         font-size: 14px !important;
         font-weight: 400 !important;
     }}
+    
+    .stAlert {{ background-color: white !important; color: {KPMG_DARK_GREY} !important; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -129,6 +136,25 @@ def get_base64_image(image_path):
     except: pass
     return None
 
+# --- SESSION INITIALIZATION ---
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+if "current_step" not in st.session_state: st.session_state.current_step = 1
+if "audit_context" not in st.session_state: st.session_state.audit_context = {}
+if "ocr_samples" not in st.session_state: st.session_state.ocr_samples = []
+if "processed_image_names" not in st.session_state: st.session_state.processed_image_names = set()
+if "results" not in st.session_state: st.session_state.results = None
+if "api_key_valid" not in st.session_state: st.session_state.api_key_valid = False
+if "last_checked_key" not in st.session_state: st.session_state.last_checked_key = ""
+if "show_balloons" not in st.session_state: st.session_state.show_balloons = False
+if "ocr_busy" not in st.session_state: st.session_state.ocr_busy = False
+
+# Isolated Data Directory
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SESSION_DATA_DIR = os.path.join(BASE_DIR, "data", "sessions", st.session_state.session_id)
+if not os.path.exists(SESSION_DATA_DIR):
+    os.makedirs(SESSION_DATA_DIR, exist_ok=True)
+
 # Sidebar Content
 with st.sidebar:
     logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.png")
@@ -137,7 +163,7 @@ with st.sidebar:
         st.markdown(f'''<div class="logo-container"><img src="data:image/png;base64,{logo_b64}" class="massive-logo"></div>''', unsafe_allow_html=True)
     st.header("系统引擎配置")
     deepseek_api_key = st.text_input("DeepSeek API Key", type="password")
-    if deepseek_api_key and deepseek_api_key != st.session_state.get("last_checked_key", ""):
+    if deepseek_api_key and deepseek_api_key != st.session_state.last_checked_key:
         from llm_client import LLMClient
         with st.spinner("验证密钥..."):
             temp_client = LLMClient(api_key=deepseek_api_key)
@@ -146,26 +172,16 @@ with st.sidebar:
             st.session_state.last_checked_key = deepseek_api_key
             if is_ok: st.toast("✅ API 密钥有效")
             else: st.error(f"❌ 密钥无效: {msg}")
-    if st.session_state.get("api_key_valid"): st.success("✅ 密钥验证通过")
+    if st.session_state.api_key_valid: st.success("✅ 密钥验证通过")
     selected_model = st.selectbox("分析模型选择", ["deepseek-chat", "deepseek-reasoner"], index=0)
     st.divider()
     st.caption("KPMG IT Audit Tool | Tech & Innovation")
-    # Status dot to prove it's not 'stuck'
-    st.sidebar.markdown(f"● <span style='color:{KPMG_TEAL}; font-size:10px;'>System Online</span>", unsafe_allow_html=True)
-
+    st.sidebar.markdown(f"● <span style='color:{KPMG_TEAL}; font-size:10px;'>System Online (Session: {st.session_state.session_id[:8]})</span>", unsafe_allow_html=True)
 
 # Main Header
 st.title("ITAC 自动化底稿生成中心")
 st.markdown("<p class='sub-caption'>专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>", unsafe_allow_html=True)
 st.divider()
-
-# Initialize Session States
-if "current_step" not in st.session_state: st.session_state.current_step = 1
-if "audit_context" not in st.session_state: st.session_state.audit_context = {}
-if "ocr_samples" not in st.session_state: st.session_state.ocr_samples = []
-if "processed_image_names" not in st.session_state: st.session_state.processed_image_names = set()
-if "results" not in st.session_state: st.session_state.results = None
-if "show_balloons" not in st.session_state: st.session_state.show_balloons = False
 
 # --- MAIN RENDER LOGIC ---
 if st.session_state.results:
@@ -232,7 +248,6 @@ elif st.session_state.current_step == 2:
     with u2: skat_file = st.file_uploader("SKAT 科目表", type=["csv", "xlsx", "xls"])
     with u3: tb_file = st.file_uploader("余额表", type=["csv", "xlsx", "xls"])
     st.write("---")
-    # Centered Grouped Navigation
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
         if st.button("返回上一步", use_container_width=True): st.session_state.current_step = 1; st.rerun()
@@ -240,13 +255,12 @@ elif st.session_state.current_step == 2:
         if st.button("确认并下一步", use_container_width=True):
             if t030_file and skat_file and tb_file:
                 with st.spinner("数据校验中..."):
-                    temp_data_dir = r"C:\Users\Laptop\.gemini\tmp\system32\AuditHackathon\data"
-                    if not os.path.exists(temp_data_dir): os.makedirs(temp_data_dir)
                     all_v = True
                     for f_t, f_o in {"T030": t030_file, "SKAT": skat_file, "TrialBalance": tb_file}.items():
                         is_v, msg, df = DataValidator.validate_file(f_o, f_t)
                         if not is_v: st.error(f"❌ {f_t} 失败: {msg}"); all_v = False; break
-                        df.to_csv(os.path.join(temp_data_dir, f"{f_t}.csv"), index=False, encoding='utf-8-sig')
+                        # Force isolated output path
+                        df.to_csv(os.path.join(SESSION_DATA_DIR, f"{f_t}.csv"), index=False, encoding='utf-8-sig')
                     if all_v: st.session_state.current_step = 3; st.rerun()
             else: st.warning("❗ 请上传全部表格。")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -263,36 +277,42 @@ elif st.session_state.current_step == 3:
     with s1: samples_file = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"])
     with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
     if voucher_images:
-        for img in voucher_images:
-            if img.name not in st.session_state.processed_image_names:
-                with st.status(f"🚀 解析: {img.name}...") as status:
-                    img_bytes = img.getvalue()
-                    llm_c = None
-                    if deepseek_api_key:
-                        from llm_client import LLMClient
-                        llm_c = LLMClient(api_key=deepseek_api_key, model_name=selected_model)
-                    res = st.session_state.ocr_engine_inst.process_and_parse(img_bytes, llm_client=llm_c)
-                    if "items" in res:
-                        for it in res["items"]:
-                            if it.get("DOC_NUM") and str(it.get("DOC_NUM")).lower() != "null":
-                                item_id = f"{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
-                                if item_id not in [f"{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
-                                    st.session_state.ocr_samples.append(it)
-                        st.session_state.processed_image_names.add(img.name)
-                    status.update(label=f"✅ {img.name} 完成", state="complete")
+        # Check if there are NEW images to process
+        new_imgs = [img for img in voucher_images if img.name not in st.session_state.processed_image_names]
+        if new_imgs:
+            st.session_state.ocr_busy = True
+            try:
+                for img in new_imgs:
+                    with st.status(f"🚀 解析: {img.name}...") as status:
+                        img_bytes = img.getvalue()
+                        llm_c = None
+                        if deepseek_api_key:
+                            from llm_client import LLMClient
+                            llm_c = LLMClient(api_key=deepseek_api_key, model_name=selected_model)
+                        res = st.session_state.ocr_engine_inst.process_and_parse(img_bytes, llm_client=llm_c)
+                        if "items" in res:
+                            for it in res["items"]:
+                                if it.get("DOC_NUM") and str(it.get("DOC_NUM")).lower() != "null":
+                                    item_id = f"{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
+                                    if item_id not in [f"{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
+                                        st.session_state.ocr_samples.append(it)
+                            st.session_state.processed_image_names.add(img.name)
+                        status.update(label=f"✅ {img.name} 完成", state="complete")
+            finally:
+                st.session_state.ocr_busy = False
+                st.rerun() # Refresh to enable button
     if st.session_state.ocr_samples:
         st.write("**📋 已录入样本预览**")
         st.dataframe(pd.DataFrame(st.session_state.ocr_samples), use_container_width=True)
     st.write("---")
-    # Centered Grouped Navigation
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
         if st.button("返回上一步", use_container_width=True): st.session_state.current_step = 2; st.rerun()
     with nav_cols[2]:
-        if st.button("🚀 生成最终底稿", use_container_width=True):
-            if samples_file or st.session_state.ocr_samples:
-                with st.spinner("AI 正在撰写穿行测试描述..."):
-                    temp_data_dir = r"C:\Users\Laptop\.gemini\tmp\system32\AuditHackathon\data"
+        # Only enable button if ocr is not busy AND we have either a file or OCR samples
+        btn_disabled = st.session_state.ocr_busy or (not samples_file and not st.session_state.ocr_samples)
+        if st.button("🚀 生成最终底稿", use_container_width=True, disabled=btn_disabled):
+            with st.spinner("AI 正在撰写穿行测试描述..."):
                     if samples_file:
                         is_v, msg, s_df = DataValidator.validate_file(samples_file, "Samples")
                         if not is_v: st.error(msg); st.stop()
@@ -301,14 +321,26 @@ elif st.session_state.current_step == 3:
                         for s in st.session_state.ocr_samples:
                             lines.append({"DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
                         s_df = pd.DataFrame(lines)
-                    s_df.to_csv(os.path.join(temp_data_dir, "Samples.csv"), index=False, encoding='utf-8-sig')
-                    c1 = Core1Orchestrator(temp_data_dir); ranked = c1.run()
-                    c2 = Core2Orchestrator(temp_data_dir)
+                    s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding='utf-8-sig')
+                    
+                    c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
+                    
+                    # Debug: Show internal stats if results are weird
+                    if not ranked or sum(r['total_value'] for r in ranked) == 0:
+                        st.warning(f"⚠️ 核心引擎警告: 未能匹配到任何活跃的审计场景。请检查上传清单的内容。")
+                    
+                    c2 = Core2Orchestrator(SESSION_DATA_DIR)
                     if deepseek_api_key:
                         from llm_client import LLMClient
+                        # 确保 Core2 使用用户输入的真实 API Key
                         c2.llm_client = LLMClient(api_key=deepseek_api_key, model_name=selected_model)
+                    
                     di = c2.generate_di_descriptions(ranked, st.session_state.audit_context)
-                    gen = ReportGenerator(temp_data_dir); path = gen.generate(ranked, di, st.session_state.audit_context)
+                    
+                    if not di:
+                        st.info("💡 提示：未能从上传的凭证截图或 Samples 列表中找到与审计场景匹配的样本项目。")
+                    
+                    gen = ReportGenerator(SESSION_DATA_DIR); path = gen.generate(ranked, di, st.session_state.audit_context)
                     st.session_state.results = {"ranked": ranked, "di": di, "report_path": path}
                     st.session_state.show_balloons = True; st.rerun()
             else: st.warning("❗ 请提供样本数据。")

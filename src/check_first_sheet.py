@@ -1,6 +1,7 @@
+import os
 import openpyxl
 
-path = r"C:\Users\Laptop\Downloads\【2026】ITAC_P2P_02 采购收货入应付暂估会计凭证.xlsx"
+path = "【2026】ITAC_P2P_02 采购收货入应付暂估会计凭证.xlsx"
 wb = openpyxl.load_workbook(path, data_only=True)
 print(f"Sheets: {wb.sheetnames}")
 

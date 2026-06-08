@@ -1,192 +1,211 @@
 import pandas as pd
 import io
 import re
+import os
 
 class DataValidator:
     REQUIRED_COLUMNS = {
         "SKAT": ["SAKNR", "TXT50"],
         "T030": ["KONTS", "KONTH"], 
         "TrialBalance": ["SAKNR", "DMBTR_DEBIT", "DMBTR_CREDIT"],
-        "Samples": ["DOC_NUM", "SAKNR", "AMOUNT"] # Minimum for raw line items
+        "Samples": ["DOC_NUM", "SAKNR", "AMOUNT"]
     }
 
     @staticmethod
     def validate_file(file_obj, file_type):
-        """
-        Validates the uploaded CSV or XLSX file for the specified type.
-        Returns (is_valid, message, cleaned_df)
-        """
+        error_log = []
+        df = None
         try:
-            filename = file_obj.name.lower()
+            file_obj.seek(0)
+            raw_content = file_obj.read()
             
-            HEADER_KEYWORDS = {
-                "saknr": 2, "txt50": 2, "konts": 2, "konth": 2, "总帐科目": 2, "总账科目": 2,
-                "借方余额": 2, "贷方余额": 2, "借方金额": 2, "贷方金额": 2,
-                "科目": 1, "帐": 1, "账": 1, "account": 1, "doc": 1, "amount": 1, "金额": 1,
-                "余额": 1, "借方": 1, "贷方": 1, "公司": 1, "文本": 1, "描述": 1
-            }
-            FORBIDDEN_HEADER_KEYWORDS = ["时间", "页", "日期", "制表", "筛选", "青岛", "四川", "新希望"]
-
-            def find_real_header(df_raw):
-                """Scans top rows to find the row that most looks like a header"""
-                best_row_idx = -1
-                max_score = -999
-                
-                for i, row in df_raw.head(100).iterrows():
-                    vals = [str(v).strip().lower() for v in row.values if pd.notna(v) and str(v).strip()]
-                    if not vals: continue 
-                    
-                    row_str = " ".join(vals)
-                    score = 0
-                    
-                    if any(k in row_str for k in FORBIDDEN_HEADER_KEYWORDS):
-                        score -= 5
-                    
-                    for k, weight in HEADER_KEYWORDS.items():
-                        if k in row_str: score += weight
-                    
-                    if len(vals) >= 5: score += 1
-                    
-                    if score > max_score:
-                        max_score = score
-                        best_row_idx = i
-                
-                if max_score >= 3:
-                    row = df_raw.iloc[best_row_idx]
-                    raw_cols = [str(c).strip() for c in row.values]
-                    new_cols = []
-                    counts = {}
-                    for c in raw_cols:
-                        if not c or c == 'nan' or c == 'None': c = f"Unnamed_{len(new_cols)}"
-                        if c in counts:
-                            counts[c] += 1
-                            new_cols.append(f"{c}.{counts[c]}")
-                        else:
-                            counts[c] = 0
-                            new_cols.append(c)
-
-                    df_adjusted = df_raw.iloc[best_row_idx+1:].copy()
-                    df_adjusted.columns = new_cols
-                    return df_adjusted.dropna(how='all')
-                return df_raw
-
-            # --- Reading Logic with "Fake" Excel support ---
-            df = None
-            if filename.endswith('.csv'):
-                content = file_obj.getvalue().decode('utf-8-sig')
-                df = pd.read_csv(io.StringIO(content))
-                df = find_real_header(df)
-            elif filename.endswith('.xlsx') or filename.endswith('.xls'):
+            # --- 阶段 1：Excel ---
+            for eng in ['openpyxl', 'xlrd']:
                 try:
-                    # 1. Try standard Excel
-                    df_raw = pd.read_excel(file_obj, header=None)
-                    df = find_real_header(df_raw)
-                except:
-                    # 2. Try Manual UTF-16 Multi-Split (The "Universal SAP Opener")
+                    df_raw = pd.read_excel(io.BytesIO(raw_content), header=None, engine=eng)
+                    df = DataValidator._find_real_header(df_raw, file_type)
+                    if df is not None: break
+                except Exception as e:
+                    error_log.append(f"Excel({eng})失败")
+
+            # --- 阶段 2：文本拆解 ---
+            if df is None:
+                for enc in ['utf-16', 'utf-8-sig', 'gb18030', 'latin1']:
                     try:
-                        file_obj.seek(0)
-                        raw_bytes = file_obj.read()
-                        text = raw_bytes.decode('utf-16')
-                        lines = [l.strip() for l in text.split('\n') if l.strip()]
-                        
+                        text = raw_content.decode(enc)
+                        lines = [l for l in text.splitlines() if l.strip()]
                         split_data = []
-                        for l in lines:
-                            if '\t' in l:
-                                parts = [p.strip() for p in re.split(r'\t+', l) if p.strip()]
-                            else:
-                                parts = [p.strip() for p in re.split(r'\s{2,}', l) if p.strip()]
+                        for line in lines:
+                            parts = [p.strip() for p in re.split(r'\t+|\s{2,}', line) if p.strip()]
                             if parts: split_data.append(parts)
-                        
                         if split_data:
-                            df_raw = pd.DataFrame(split_data)
-                            df = find_real_header(df_raw)
-                    except:
-                        file_obj.seek(0)
-                        try:
-                            df_raw = pd.read_html(file_obj)[0]
-                            df = find_real_header(df_raw)
-                        except:
-                            file_obj.seek(0)
-                            df_raw = pd.read_csv(file_obj, header=None, on_bad_lines='skip')
-                            df = find_real_header(df_raw)
+                            max_cols = max(len(r) for r in split_data)
+                            normalized_data = [r + [None]*(max_cols-len(r)) for r in split_data]
+                            df_raw = pd.DataFrame(normalized_data)
+                            df = DataValidator._find_real_header(df_raw, file_type)
+                            if df is not None: break
+                    except: continue
+
+            # --- 阶段 3：HTML ---
+            if df is None:
+                try:
+                    df_raw = pd.read_html(io.BytesIO(raw_content))[0]
+                    df = DataValidator._find_real_header(df_raw, file_type)
+                except: pass
 
             if df is None:
-                return False, "文件读取失败，格式无法识别", None
-            
-            # --- Standard Validation & Mapping ---
+                return False, "无法读取文件，格式识别失败。", None
+
+            # --- 阶段 4：列名映射 ---
+            df.columns = [str(c).strip() for c in df.columns]
             df = DataValidator._map_columns(df, file_type)
-            detected_cols = [str(c) for c in df.columns]
+            
+            # T030 专项补丁
+            if file_type == "T030":
+                if "KONTS" not in df.columns and "SAKNR" in df.columns:
+                    df = df.rename(columns={"SAKNR": "KONTS"})
+                if "KONTH" not in df.columns:
+                    pos = [c for c in df.columns if ".1" in str(c) or "Unnamed" in str(c) or "科目" in str(c)]
+                    if len(pos) > 0:
+                        for p in pos:
+                            if p != "KONTS": df = df.rename(columns={p: "KONTH"}); break
+                    if "KONTH" not in df.columns and "KONTS" in df.columns: df["KONTH"] = df["KONTS"]
 
             required = DataValidator.REQUIRED_COLUMNS.get(file_type, [])
             missing = [col for col in required if col not in df.columns]
             
-            if file_type == "T030":
-                if "KONTS" not in df.columns and "KONTH" not in df.columns:
-                    return False, f"T030 表识别失败。未找到科目列。检测到列名: {detected_cols}", None
-            elif missing:
-                return False, f"{file_type} 表缺失必要字段: {', '.join(missing)}。检测到列名: {detected_cols}", None
+            # TrialBalance 特殊保底
+            if missing and file_type == "TrialBalance" and df.shape[1] >= 5:
+                df = DataValidator._positional_fallback(df)
+                missing = [col for col in required if col not in df.columns]
 
-            # Basic Cleaning
-            df = df.dropna(how='all')
-            for col in ["SAKNR", "DEBIT_ACC", "CREDIT_ACC", "DOC_NUM", "KONTS", "KONTH"]:
-                if col in df.columns:
-                    df[col] = df[col].astype(str).str.strip().str.replace('\.0$', '', regex=True)
-            for col in ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]:
-                if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace('[^0-9\.\-]', '', regex=True)
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            if missing:
+                return False, f"表缺失必要字段: {', '.join(missing)}。检测到列: {df.columns.tolist()}", None
 
-            if df.empty:
-                return False, f"{file_type} 表为空，请检查数据内容", None
+            # --- 阶段 5：物理列清洗 (防重名) ---
+            new_col_names = []
+            counts = {}
+            for c in df.columns:
+                c_str = str(c)
+                if c_str in counts:
+                    counts[c_str] += 1
+                    new_col_names.append(f"{c_str}_{counts[c_str]}")
+                else:
+                    counts[c_str] = 0
+                    new_col_names.append(c_str)
+            df.columns = new_col_names
+
+            for i in range(df.shape[1]):
+                col_name = df.columns[i]
+                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC"]):
+                    df.iloc[:, i] = df.iloc[:, i].astype(str).str.strip().str.replace('\.0$', '', regex=True)
+                if any(k in col_name for k in ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]):
+                    s = df.iloc[:, i].astype(str).str.replace('[^0-9\.\-]', '', regex=True)
+                    df.iloc[:, i] = pd.to_numeric(s, errors='coerce').fillna(0.0)
 
             return True, "验证通过", df
         except Exception as e:
-            return False, f"系统级异常: {str(e)}", None
+            return False, f"验证器异常: {str(e)}", None
+
+    @staticmethod
+    def _find_real_header(df_raw, file_type):
+        """寻找表头行：智能计分算法"""
+        KEYWORDS = {
+            "saknr": 20, "konts": 20, "konth": 20, "总帐科目": 20, "总账科目": 20,
+            "dmbtr": 15, "借方余额": 15, "贷方余额": 15, "借方金额": 15, "贷方金额": 15,
+            "评估分组代码": 15, "科目修改": 15, "trs": 15, "valcl": 15,
+            "已结转余额": 15, "前一期间的余额": 15, "在制表期间的借方余额": 15,
+            "txt50": 10, "短文本": 10, "科目名称": 10, "科目描述": 10, "帐目表": 10
+        }
+        # 严禁词：只针对纯粹的 metadata 标题
+        FORBIDDEN = ["时间", "制表", "筛选", "页码", "1/"]
+
+        best_idx = -1
+        max_score = -99
+        
+        for i, row in df_raw.head(50).iterrows():
+            vals = [str(v).strip().lower() for v in row.values if pd.notna(v) and str(v).strip()]
+            if len(vals) < 2: continue
+            
+            row_str = " ".join(vals)
+            score = 0
+            
+            # 1. 禁词检查
+            for fk in FORBIDDEN:
+                if fk in row_str: score -= 50
+            
+            # 2. 关键词匹配
+            for k, w in KEYWORDS.items():
+                if k in row_str: score += w
+            
+            # 3. 结构特征：真实表头通常不含纯数字
+            num_count = sum(1 for v in vals if re.match(r'^-?\d+(\.\d+)?$', v.replace(',', '')))
+            if num_count > len(vals) * 0.5:
+                score -= 40 # 数据行大幅扣分
+            
+            # 4. 列数奖励
+            if len(vals) >= 6: score += 10
+            
+            if score > max_score:
+                max_score = score
+                best_idx = i
+        
+        if max_score >= 10:
+            row = df_raw.iloc[best_idx]
+            new_cols = []
+            for j, val in enumerate(row.values):
+                v = str(val).strip()
+                new_cols.append(v if (v and v != 'nan') else f"Col_{j}")
+            res = df_raw.iloc[best_idx+1:].copy()
+            res.columns = new_cols
+            return res.dropna(how='all')
+        return None
+
+    @staticmethod
+    def _positional_fallback(df):
+        new_map = {}
+        for i in range(df.shape[1]):
+            col_data = df.iloc[:, i].astype(str).head(100)
+            if "SAKNR" not in new_map.values() and col_data.str.match(r'^\d{8,10}$').sum() > 20:
+                new_map[df.columns[i]] = "SAKNR"
+            elif col_data.str.contains(r'\.').sum() > 20:
+                nums = pd.to_numeric(col_data.str.replace(',', ''), errors='coerce')
+                if nums.notna().sum() > 30:
+                    if "DMBTR_DEBIT" not in new_map.values(): new_map[df.columns[i]] = "DMBTR_DEBIT"
+                    elif "DMBTR_CREDIT" not in new_map.values(): new_map[df.columns[i]] = "DMBTR_CREDIT"
+        return df.rename(columns=new_map)
 
     @staticmethod
     def _map_columns(df, file_type):
         MAPPING = {
-            "KONTS": ["konts", "借方科目", "Debit Account", "DEBIT_ACC", "总帐科目", "总账科目"],
-            "KONTH": ["konth", "贷方科目", "Credit Account", "CREDIT_ACC", "总帐科目.1", "总账科目.1"],
-            "SAKNR": ["saknr", "科目", "总账科目", "总帐科目", "G/L Account", "Account", "Account Number", "总账科目"],
-            "TXT50": ["txt50", "科目描述", "科目名称", "Description", "Account Name", "短文本", "总分类帐名称"],
-            "DMBTR_DEBIT": ["dmbtr_debit", "借方金额", "Debit Amount", "Balance Debit", "前一期间的余额", "在制表期间的借方余额"],
-            "DMBTR_CREDIT": ["dmbtr_credit", "贷方金额", "Credit Amount", "Balance Credit", "累计余额", "报表期间的贷方余额"],
-            "DOC_NUM": ["doc_num", "凭证号", "会计凭证", "Document Number", "Voucher", "开票凭证"],
-            "DATE": ["date", "日期", "过账日期", "Posting Date", "Posting_Date"],
-            "AMOUNT": ["amount", "金额", "交易金额", "Value", "Total Amount"],
-            "SHKZG": ["shkzg", "借/贷标识", "借贷标识", "D/C Indicator", "S/H"]
+            "KONTS": ["konts", "借方科目", "总帐科目", "总账科目"],
+            "KONTH": ["konth", "贷方科目", "总帐科目", "总账科目"],
+            "SAKNR": ["saknr", "科目", "总账科目", "总帐科目", "G/L Account"],
+            "TXT50": ["txt50", "科目描述", "科目名称", "短文本", "总分类帐名称"],
+            "DMBTR_DEBIT": ["dmbtr_debit", "借方金额", "在制表期间的借方余额", "已结转余额", "借方", "前一期间的余额"],
+            "DMBTR_CREDIT": ["dmbtr_credit", "贷方金额", "报表期间的贷方余额", "累计余额", "贷方"],
+            "DOC_NUM": ["doc_num", "凭证号", "会计凭证"],
+            "DATE": ["date", "日期", "过账日期"],
+            "AMOUNT": ["amount", "金额", "交易金额"],
+            "SHKZG": ["shkzg", "借/贷标识", "S/H"]
         }
-
-        priority_order = ["SAKNR", "TXT50", "DMBTR_DEBIT", "DMBTR_CREDIT", "DOC_NUM", "DATE", "AMOUNT", "SHKZG"]
-        if file_type == "T030":
-            priority_order = ["KONTS", "KONTH"] + priority_order
-        else:
-            priority_order += ["KONTS", "KONTH"]
-
-        current_cols = {str(c).lower().strip(): c for c in df.columns}
-        new_names = {}
-        used_source_cols = set()
-
-        for internal_name in priority_order:
-            if internal_name in MAPPING:
-                candidates = MAPPING[internal_name]
-                for cand in candidates:
-                    cand_lower = cand.lower().strip()
-                    if cand_lower in current_cols:
-                        source_col = current_cols[cand_lower]
-                        if source_col not in used_source_cols:
-                            new_names[source_col] = internal_name
-                            used_source_cols.add(source_col)
-                            break 
-        return df.rename(columns=new_names)
+        final_names = {}
+        used_indices = set()
+        for target, aliases in MAPPING.items():
+            found = False
+            for alias in aliases:
+                for idx, actual in enumerate(df.columns):
+                    if idx in used_indices: continue
+                    a_str = str(actual).lower()
+                    al_str = alias.lower()
+                    if al_str == a_str or al_str in a_str:
+                        final_names[actual] = target
+                        used_indices.add(idx)
+                        found = True; break
+                if found: break
+        return df.rename(columns=final_names)
 
     @staticmethod
     def validate_audit_context(entity_name, system_name, start_date, end_date):
-        if not entity_name or len(entity_name.strip()) < 2:
-            return False, "被审计单位名称无效"
-        if not system_name or len(system_name.strip()) < 2:
-            return False, "系统名称无效"
-        if start_date >= end_date:
-            return False, "开始日期必须早于结束日期"
+        if not entity_name or len(entity_name.strip()) < 2: return False, "单位名称无效"
         return True, "验证通过"

@@ -13,34 +13,51 @@ class Core2Orchestrator:
         self.raw_samples = pd.DataFrame()
         samples_path = os.path.join(data_dir, "Samples.csv")
         if os.path.exists(samples_path):
-            self.raw_samples = pd.read_csv(samples_path, dtype=str)
+            try:
+                self.raw_samples = pd.read_csv(samples_path, dtype=str)
+            except: pass
+
+    def _clean_acc(self, val):
+        """标准化科目编码"""
+        s = str(val).strip().split('.')[0]
+        return s.lstrip('0') if s != '0' else '0'
 
     def generate_di_descriptions(self, identified_scenarios, audit_context=None):
         results = []
         if audit_context is None: audit_context = {}
         if self.raw_samples.empty: return []
 
-        # Ensure numeric for pairing
-        if 'AMOUNT' in self.raw_samples.columns:
-            self.raw_samples['AMT_VAL'] = pd.to_numeric(self.raw_samples['AMOUNT'], errors='coerce').fillna(0)
+        # 确保列名大写
+        self.raw_samples.columns = [str(c).strip().upper() for c in self.raw_samples.columns]
 
-        # 1. Group by Document Number
+        # 转换金额
+        if 'AMOUNT' in self.raw_samples.columns:
+            def parse_amt(v):
+                try: return abs(float(str(v).replace(',', '')))
+                except: return 0.0
+            self.raw_samples['AMT_VAL'] = self.raw_samples['AMOUNT'].apply(parse_amt)
+
+        # 1. 对 Samples 中的科目进行清洗
+        if 'SAKNR' in self.raw_samples.columns:
+            self.raw_samples['SAKNR_CLEAN'] = self.raw_samples['SAKNR'].apply(self._clean_acc)
+
+        # 2. 分组
         grouped = self.raw_samples.groupby('DOC_NUM')
 
         for scenario in identified_scenarios:
             scenario_name = scenario['name']
             target_account_codes = set()
             for acc_str in scenario['accounts']:
-                code = acc_str.split(' ')[0]
+                # 提取编码并清洗
+                code = self._clean_acc(acc_str.split(' ')[0])
                 target_account_codes.add(code)
             
-            # Find ALL matching samples for this scenario
+            # 遍历所有凭证组
             for doc_num, group in grouped:
-                doc_accounts = set(group['SAKNR'].tolist())
+                doc_accounts = set(group['SAKNR_CLEAN'].tolist())
                 
+                # 如果该凭证包含场景中的任何科目
                 if target_account_codes.intersection(doc_accounts):
-                    # For complex screenshots, a single document might have multiple relevant transaction pairs
-                    # We'll synthesize samples for this document group
                     samples = self._synthesize_all_samples(doc_num, group, target_account_codes)
                     
                     for matching_sample in samples:
@@ -68,42 +85,33 @@ class Core2Orchestrator:
         return results
 
     def _synthesize_all_samples(self, doc_num, group, target_account_codes):
-        """
-        Attempts to extract all relevant debit/credit pairs from a document group.
-        Specifically handles cases where multiple line items exist in one voucher.
-        """
         synthesized = []
         try:
-            debit_rows = group[group['SHKZG'].str.upper().isin(['S'])] if 'SHKZG' in group.columns else group[group['AMT_VAL'] > 0]
-            credit_rows = group[group['SHKZG'].str.upper().isin(['H'])] if 'SHKZG' in group.columns else group[group['AMT_VAL'] < 0]
+            # 区分借贷
+            debit_rows = group[group['SHKZG'].str.upper().isin(['S', '借'])] if 'SHKZG' in group.columns else group[group['AMT_VAL'] > 0]
+            credit_rows = group[group['SHKZG'].str.upper().isin(['H', '贷'])] if 'SHKZG' in group.columns else group[group['AMT_VAL'] < 0]
             
-            # Match them up. Simplest approach: if counts match, pair them by order.
-            # If not, try to match by absolute amount.
+            # 配对逻辑：金额相等且至少一方在目标科目中
             for _, d_row in debit_rows.iterrows():
-                # Find a credit row that "matches" this debit
-                # Rule 1: Same absolute amount
-                # Rule 2: At least one of the pair must be in the target_account_codes
-                d_acc = str(d_row['SAKNR'])
                 amt = abs(float(d_row['AMT_VAL']))
+                d_acc_clean = self._clean_acc(d_row['SAKNR'])
                 
-                # Look for a credit row with same absolute amount
-                c_match = credit_rows[abs(pd.to_numeric(credit_rows['AMOUNT'], errors='coerce')) == amt]
+                # 找金额匹配的贷方
+                c_match = credit_rows[credit_rows['AMT_VAL'].abs() == amt]
                 
                 if not c_match.empty:
                     c_row = c_match.iloc[0]
-                    c_acc = str(c_row['SAKNR'])
+                    c_acc_clean = self._clean_acc(c_row['SAKNR'])
                     
-                    # Verify if this pair is relevant to our current scenario
-                    if d_acc in target_account_codes or c_acc in target_account_codes:
+                    if d_acc_clean in target_account_codes or c_acc_clean in target_account_codes:
                         synthesized.append({
                             "DOC_NUM": doc_num,
-                            "DATE": d_row.get('DATE', '2025-01-01'),
-                            "DEBIT_ACC": d_acc,
+                            "DATE": d_row.get('DATE', '2026-06-01'),
+                            "DEBIT_ACC": d_row['SAKNR'],
                             "DEBIT_DESC": d_row.get('TXT50', '未定义科目'),
-                            "CREDIT_ACC": c_acc,
+                            "CREDIT_ACC": c_row['SAKNR'],
                             "CREDIT_DESC": c_row.get('TXT50', '未定义科目'),
                             "AMOUNT": amt
                         })
-        except:
-            pass
+        except: pass
         return synthesized

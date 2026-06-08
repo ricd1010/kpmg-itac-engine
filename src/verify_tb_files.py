@@ -17,7 +17,7 @@ class MockFile:
         pass # Simple mock, pandas handles the bytes object or I'll pass io.BytesIO
 
 def test_local_files():
-    base_dir = r"C:\Users\Laptop\.gemini\tmp\system32\AuditHackathon\data\新希望测试数据"
+    base_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "xinxiwang")
     files = ["课余表-牧业生产.xls", "课余表—乳业销售.xls"]
     
     print("=== 开始本地科余表解析测试 ===")

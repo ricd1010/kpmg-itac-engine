@@ -1,29 +1,38 @@
-import csv
+import pandas as pd
+import os
 
 class ConfigVerifier:
     def __init__(self, t030_path):
         self.t030_path = t030_path
         self.configured_accounts = set()
 
+    def _clean_acc(self, val):
+        """标准化科目编码"""
+        s = str(val).strip().split('.')[0]
+        return s.lstrip('0') if s != '0' else '0'
+
     def load_configs(self):
-        with open(self.t030_path, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                # SAP T030 stores accounts in KONTS (Debit) or KONTH (Credit)
-                if row['KONTS']:
-                    self.configured_accounts.add(row['KONTS'])
-                if row['KONTH']:
-                    self.configured_accounts.add(row['KONTH'])
+        if not os.path.exists(self.t030_path):
+            return set()
+        
+        try:
+            df = pd.read_csv(self.t030_path, dtype=str)
+            df.columns = [str(c).strip().upper() for c in df.columns]
+            
+            for _, row in df.iterrows():
+                k1 = row.get('KONTS')
+                k2 = row.get('KONTH')
+                if not pd.isna(k1): self.configured_accounts.add(self._clean_acc(k1))
+                if not pd.isna(k2): self.configured_accounts.add(self._clean_acc(k2))
+        except:
+            pass
         return self.configured_accounts
 
     def verify(self, account_roles):
+        """验证科目是否在 T030 中有配置"""
         verified_roles = {}
-        for saknr, roles in account_roles.items():
-            if saknr in self.configured_accounts:
-                verified_roles[saknr] = roles
+        for saknr_raw, roles in account_roles.items():
+            clean_id = self._clean_acc(saknr_raw)
+            if clean_id in self.configured_accounts:
+                verified_roles[saknr_raw] = roles
         return verified_roles
-
-if __name__ == "__main__":
-    verifier = ConfigVerifier(r"C:\Users\Laptop\.gemini\tmp\system32\AuditHackathon\data\T030.csv")
-    configs = verifier.load_configs()
-    print(f"Loaded {len(configs)} configured accounts from T030.")

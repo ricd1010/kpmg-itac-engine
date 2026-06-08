@@ -16,7 +16,7 @@ def test_deepseek_logic():
 
     # 2. 模拟运行核心流程，查看生成结果的来源标识
     print("\n[Step 2] 模拟核心底稿生成流程 (API 调用验证)...")
-    data_dir = r"C:\Users\Laptop\.gemini\tmp\system32\AuditHackathon\data"
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
     c2 = Core2Orchestrator(data_dir)
     
     # 注入带有 dummy key 的 client，触发 API 调用逻辑

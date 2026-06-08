@@ -4,9 +4,9 @@ import os
 import csv
 
 def extract_data():
-    p2p_02_path = r'C:\Users\Laptop\Downloads\【2026】ITAC_P2P_02 采购收货入应付暂估会计凭证.xlsx'
-    p2p_03_path = r'C:\Users\Laptop\Downloads\【2026】ITAC_P2P_03 采购发票校验入应付会计凭证.xlsx'
-    output_dir = r'C:\Users\Laptop\.gemini\tmp\system32\AuditHackathon\data'
+    p2p_02_path = '【2026】ITAC_P2P_02 采购收货入应付暂估会计凭证.xlsx'
+    p2p_03_path = '【2026】ITAC_P2P_03 采购发票校验入应付会计凭证.xlsx'
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
     # 1. Extract SKAT.csv
     print("Extracting SKAT.csv...")
