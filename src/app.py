@@ -343,7 +343,6 @@ elif st.session_state.current_step == 3:
                     gen = ReportGenerator(SESSION_DATA_DIR); path = gen.generate(ranked, di, st.session_state.audit_context)
                     st.session_state.results = {"ranked": ranked, "di": di, "report_path": path}
                     st.session_state.show_balloons = True; st.rerun()
-            else: st.warning("❗ 请提供样本数据。")
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.write("---")
