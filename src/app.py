@@ -54,17 +54,17 @@ st.markdown(f"""
         background-color: {KPMG_LIGHT_GREY} !important;
     }}
     
-    /* Force Full Screen Width and Remove Margins */
+    /* Full Screen Width with Consistent Alignment Padding */
     .main .block-container {{
         max-width: 100vw !important;
-        padding: 0px !important;
+        padding: 1.5rem 2rem 2rem 2rem !important;
         margin: 0px !important;
         width: 100vw !important;
     }}
     
     [data-testid="stAppViewBlockContainer"] {{
         max-width: 100vw !important;
-        padding: 0px !important;
+        padding: 1.5rem 2rem 2rem 2rem !important;
         margin: 0px !important;
         width: 100vw !important;
     }}
