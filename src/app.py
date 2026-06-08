@@ -149,9 +149,19 @@ if "ocr_samples" not in st.session_state: st.session_state.ocr_samples = []
 if "processed_image_names" not in st.session_state: st.session_state.processed_image_names = set()
 if "results" not in st.session_state: st.session_state.results = None
 if "api_key_valid" not in st.session_state: st.session_state.api_key_valid = False
-if "last_checked_key" not in st.session_state: st.session_state.last_checked_key = ""
+if "api_check_done" not in st.session_state: st.session_state.api_check_done = False
 if "show_balloons" not in st.session_state: st.session_state.show_balloons = False
 if "ocr_busy" not in st.session_state: st.session_state.ocr_busy = False
+
+# Background API Validation
+if not st.session_state.api_check_done and DEFAULT_KEY:
+    from llm_client import LLMClient
+    temp_client = LLMClient(api_key=DEFAULT_KEY)
+    is_ok, msg = temp_client.validate_api_key()
+    st.session_state.api_key_valid = is_ok
+    st.session_state.api_check_done = True
+    if is_ok: st.toast("🚀 KPMG AI Engine: DeepSeek API 已成功接入", icon="✅")
+    else: st.error(f"❌ AI 引擎连接失败: {msg}")
 
 # Isolated Data Directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -159,32 +169,41 @@ SESSION_DATA_DIR = os.path.join(BASE_DIR, "data", "sessions", st.session_state.s
 if not os.path.exists(SESSION_DATA_DIR):
     os.makedirs(SESSION_DATA_DIR, exist_ok=True)
 
-# Sidebar Content
-with st.sidebar:
-    logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.png")
-    logo_b64 = get_base64_image(logo_path)
-    if logo_b64:
-        st.markdown(f'''<div class="logo-container"><img src="data:image/png;base64,{logo_b64}" class="massive-logo"></div>''', unsafe_allow_html=True)
-    st.header("系统引擎配置")
-    deepseek_api_key = st.text_input("DeepSeek API Key", type="password", value=DEFAULT_KEY)
-    if deepseek_api_key and deepseek_api_key != st.session_state.last_checked_key:
-        from llm_client import LLMClient
-        with st.spinner("验证密钥..."):
-            temp_client = LLMClient(api_key=deepseek_api_key)
-            is_ok, msg = temp_client.validate_api_key()
-            st.session_state.api_key_valid = is_ok
-            st.session_state.last_checked_key = deepseek_api_key
-            if is_ok: st.toast("✅ API 密钥有效")
-            else: st.error(f"❌ 密钥无效: {msg}")
-    if st.session_state.api_key_valid: st.success("✅ 密钥验证通过")
-    selected_model = st.selectbox("分析模型选择", ["deepseek-chat", "deepseek-reasoner"], index=0)
-    st.divider()
-    st.caption("KPMG IT Audit Tool | Tech & Innovation")
-    st.sidebar.markdown(f"● <span style='color:{KPMG_TEAL}; font-size:10px;'>System Online (Session: {st.session_state.session_id[:8]})</span>", unsafe_allow_html=True)
+# Main Header Area with Logo
+logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.png")
+# Note: Since sidebar is removed, we'll use a blue header bar or just the logo
+logo_b64 = get_base64_image(logo_path)
 
-# Main Header
-st.title("ITAC 自动化底稿生成中心")
-st.markdown("<p class='sub-caption'>专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>", unsafe_allow_html=True)
+header_html = f"""
+<div style="background-color: {KPMG_BLUE}; padding: 1.5rem; border-radius: 8px; margin-bottom: 2rem; display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; align-items: center;">
+        <img src="data:image/png;base64,{logo_b64}" style="height: 40px; margin-right: 20px;">
+        <div style="color: white;">
+            <h1 style="color: white !important; font-size: 24px !important; margin: 0 !important; border: none !important; padding: 0 !important;">ITAC 自动化底稿生成中心</h1>
+            <p style="margin: 0 !important; font-size: 14px; opacity: 0.8;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>
+        </div>
+    </div>
+    <div style="text-align: right; color: white;">
+        <div style="font-size: 12px; font-weight: 600;">System Online</div>
+        <div style="font-size: 10px; opacity: 0.7;">Session: {st.session_state.session_id[:8]}</div>
+    </div>
+</div>
+"""
+st.markdown(header_html, unsafe_allow_html=True)
+
+# Model & Status Bar
+c1, c2, c3 = st.columns([2, 1, 1])
+with c1:
+    if st.session_state.api_key_valid:
+        st.success("🤖 DeepSeek AI 审计助手已就绪")
+    else:
+        st.warning("⚠️ 基础分析模式 (Mock Mode)")
+with c2:
+    selected_model = st.selectbox("分析模型", ["deepseek-chat", "deepseek-reasoner"], label_visibility="collapsed")
+with c3:
+    if st.button("🔄 重置任务", use_container_width=True):
+        st.session_state.current_step = 1; st.session_state.results = None; st.session_state.ocr_samples = []; st.session_state.processed_image_names = set(); st.session_state.show_balloons = False; st.rerun()
+
 st.divider()
 
 # --- MAIN RENDER LOGIC ---
