@@ -209,17 +209,17 @@ logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.pn
 logo_b64 = get_base64_image(logo_path)
 
 header_html = f"""
-<div style="background-color: {KPMG_BLUE}; padding: 1.5rem; border-radius: 8px; margin-bottom: 2rem; display: flex; align-items: center; justify-content: space-between;">
+<div style="background-color: {KPMG_BLUE}; padding: 3rem 4rem; border-radius: 0px; margin-bottom: 2rem; display: flex; align-items: center; justify-content: space-between;">
     <div style="display: flex; align-items: center;">
-        <img src="data:image/png;base64,{logo_b64}" style="height: 40px; margin-right: 20px;">
+        <img src="data:image/png;base64,{logo_b64}" style="height: 65px; margin-right: 35px;">
         <div style="color: white;">
-            <span style="color: #FFFFFF !important; font-size: 26px !important; font-weight: 800; display: block; margin-bottom: 4px; line-height: 1.2;">ITAC 自动化底稿生成中心</span>
-            <p style="margin: 0 !important; font-size: 14px; opacity: 0.8; color: #FFFFFF !important; font-weight: 500;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>
+            <span style="color: #FFFFFF !important; font-size: 32px !important; font-weight: 800; display: block; margin-bottom: 6px; line-height: 1.2;">ITAC 自动化底稿生成中心</span>
+            <p style="margin: 0 !important; font-size: 16px; opacity: 0.85; color: #FFFFFF !important; font-weight: 500;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>
         </div>
     </div>
     <div style="text-align: right; color: white;">
-        <div style="font-size: 12px; font-weight: 600;">System Online</div>
-        <div style="font-size: 10px; opacity: 0.7;">Session: {st.session_state.session_id[:8]}</div>
+        <div style="font-size: 14px; font-weight: 600; letter-spacing: 1px;">SYSTEM ONLINE</div>
+        <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">Session Tracking: {st.session_state.session_id[:12].upper()}</div>
     </div>
 </div>
 """
