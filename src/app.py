@@ -173,14 +173,15 @@ st.markdown(f"""
     }}
 
     /* Vertical Centering for Toolbar Elements */
-    [data-testid="column"] {{
-        display: flex !important;
-        flex-direction: column !important;
-        justify-content: center !important;
+    [data-testid="stSelectbox"] {{
+        margin-top: -12px !important; /* Counter-act default invisible label space */
+        margin-bottom: 0px !important;
     }}
     
-    .stSelectbox {{
-        margin-top: -15px !important; /* Counter-act default label space even when collapsed */
+    div[data-testid="column"]:nth-of-type(1) {{
+        display: flex !important;
+        align-items: center !important;
+        height: 40px !important; /* Set a fixed height to align with selectbox */
     }}
     </style>
     """, unsafe_allow_html=True)
