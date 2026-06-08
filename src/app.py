@@ -254,7 +254,7 @@ header_html = f"""
 st.markdown(header_html, unsafe_allow_html=True)
 
 # Model & Status Bar
-c1, c2 = st.columns([3, 1])
+c1, c2 = st.columns([3, 1], vertical_alignment="center")
 with c1:
     if st.session_state.api_key_valid:
         st.success("🤖 已成功部署DeepSeek API")
