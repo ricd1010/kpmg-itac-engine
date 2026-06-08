@@ -61,10 +61,17 @@ st.markdown(f"""
         padding-left: 0rem !important;
         padding-right: 0rem !important;
         max-width: 100% !important;
+        width: 100% !important;
     }}
 
-    [data-testid="stAppViewContainer"] > section:nth-child(2) > div:nth-child(1) {{
-        padding: 0 !important;
+    [data-testid="stAppViewBlockContainer"] {{
+        max-width: 100% !important;
+        padding: 0rem !important;
+    }}
+    
+    [data-testid="stHeader"] {{
+        background: rgba(0,0,0,0) !important;
+        color: white !important;
     }}
 
     
