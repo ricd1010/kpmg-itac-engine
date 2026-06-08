@@ -146,19 +146,20 @@ st.markdown(f"""
     
     .stAlert {{ background-color: white !important; color: {KPMG_DARK_GREY} !important; }}
 
-    /* Centering the Spinner */
-    [data-testid="stSpinner"] {{
-        display: flex;
-        justify-content: center;
-        align-items: center;
+    /* Universal Centering for Spinner and Status Text */
+    [data-testid="stSpinner"], [data-testid="stStatusWidget"] {{
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
         width: 100% !important;
-        margin-top: 2rem !important;
-        margin-bottom: 2rem !important;
-    }}
-    [data-testid="stSpinner"] > div {{
-        width: 100% !important;
+        margin-top: 1.5rem !important;
+        margin-bottom: 1.5rem !important;
         text-align: center !important;
-        font-size: 1.2rem !important;
+    }}
+    [data-testid="stSpinner"] > div, [data-testid="stStatusWidget"] > div {{
+        width: auto !important;
+        text-align: center !important;
+        font-size: 1.1rem !important;
         font-weight: 600 !important;
         color: {KPMG_BLUE} !important;
     }}
