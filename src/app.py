@@ -192,7 +192,7 @@ header_html = f"""
 st.markdown(header_html, unsafe_allow_html=True)
 
 # Model & Status Bar
-c1, c2, c3 = st.columns([2, 1, 1])
+c1, c2 = st.columns([3, 1])
 with c1:
     if st.session_state.api_key_valid:
         st.success("🤖 DeepSeek AI 审计助手已就绪")
@@ -200,9 +200,6 @@ with c1:
         st.warning("⚠️ 基础分析模式 (Mock Mode)")
 with c2:
     selected_model = st.selectbox("分析模型", ["deepseek-chat", "deepseek-reasoner"], label_visibility="collapsed")
-with c3:
-    if st.button("🔄 重置任务", use_container_width=True):
-        st.session_state.current_step = 1; st.session_state.results = None; st.session_state.ocr_samples = []; st.session_state.processed_image_names = set(); st.session_state.show_balloons = False; st.rerun()
 
 st.divider()
 
