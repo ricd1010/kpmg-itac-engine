@@ -221,7 +221,7 @@ if st.session_state.results:
             with st.expander(f"📌 {it['scenario']}"):
                 st.info(it["di_description"]); st.write("**样本细节记录 (TOE):**"); st.json(it["sample_table"])
     with t3:
-            st.subheader("最终成果文件导出")
+        st.subheader("最终成果文件导出")
         with open(res["report_path"], "rb") as f:
             st.download_button(label="📥 下载最终 Excel 审计底稿", data=f.read(), file_name=f"ITAC_WP_{st.session_state.audit_context.get('entity_name','Audit')}.xlsx", use_container_width=True)
         st.write("") 
@@ -326,36 +326,36 @@ elif st.session_state.current_step == 3:
         btn_disabled = st.session_state.ocr_busy or (not samples_file and not st.session_state.ocr_samples)
         if st.button("🚀 生成最终底稿", use_container_width=True, disabled=btn_disabled):
             with st.spinner("AI 正在撰写穿行测试描述..."):
-                    if samples_file:
-                        is_v, msg, s_df = DataValidator.validate_file(samples_file, "Samples")
-                        if not is_v: st.error(msg); st.stop()
-                    else:
-                        lines = []
-                        for s in st.session_state.ocr_samples:
-                            lines.append({"DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
-                        s_df = pd.DataFrame(lines)
-                    s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding='utf-8-sig')
-                    
-                    c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
-                    
-                    # Debug: Show internal stats if results are weird
-                    if not ranked or sum(r['total_value'] for r in ranked) == 0:
-                        st.warning(f"⚠️ 核心引擎警告: 未能匹配到任何活跃的审计场景。请检查上传清单的内容。")
-                    
-                    c2 = Core2Orchestrator(SESSION_DATA_DIR)
-                    if deepseek_api_key:
-                        from llm_client import LLMClient
-                        # 确保 Core2 使用用户输入的真实 API Key
-                        c2.llm_client = LLMClient(api_key=deepseek_api_key, model_name=selected_model)
-                    
-                    di = c2.generate_di_descriptions(ranked, st.session_state.audit_context)
-                    
-                    if not di:
-                        st.info("💡 提示：未能从上传的凭证截图或 Samples 列表中找到与审计场景匹配的样本项目。")
-                    
-                    gen = ReportGenerator(SESSION_DATA_DIR); path = gen.generate(ranked, di, st.session_state.audit_context)
-                    st.session_state.results = {"ranked": ranked, "di": di, "report_path": path}
-                    st.session_state.show_balloons = True; st.rerun()
+                if samples_file:
+                    is_v, msg, s_df = DataValidator.validate_file(samples_file, "Samples")
+                    if not is_v: st.error(msg); st.stop()
+                else:
+                    lines = []
+                    for s in st.session_state.ocr_samples:
+                        lines.append({"DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
+                    s_df = pd.DataFrame(lines)
+                s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding='utf-8-sig')
+                
+                c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
+                
+                # Debug: Show internal stats if results are weird
+                if not ranked or sum(r['total_value'] for r in ranked) == 0:
+                    st.warning(f"⚠️ 核心引擎警告: 未能匹配到任何活跃的审计场景。请检查上传清单的内容。")
+                
+                c2 = Core2Orchestrator(SESSION_DATA_DIR)
+                if deepseek_api_key:
+                    from llm_client import LLMClient
+                    # 确保 Core2 使用用户输入的真实 API Key
+                    c2.llm_client = LLMClient(api_key=deepseek_api_key, model_name=selected_model)
+                
+                di = c2.generate_di_descriptions(ranked, st.session_state.audit_context)
+                
+                if not di:
+                    st.info("💡 提示：未能从上传的凭证截图或 Samples 列表中找到与审计场景匹配的样本项目。")
+                
+                gen = ReportGenerator(SESSION_DATA_DIR); path = gen.generate(ranked, di, st.session_state.audit_context)
+                st.session_state.results = {"ranked": ranked, "di": di, "report_path": path}
+                st.session_state.show_balloons = True; st.rerun()
 
 st.write("---")
 st.caption("© 2026 KPMG. All rights reserved. | IT Audit Technology & Innovation")
