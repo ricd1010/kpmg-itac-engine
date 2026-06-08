@@ -196,8 +196,8 @@ header_html = f"""
     <div style="display: flex; align-items: center;">
         <img src="data:image/png;base64,{logo_b64}" style="height: 40px; margin-right: 20px;">
         <div style="color: white;">
-            <span style="color: #FFFFFF !important; font-size: 63px !important; font-weight: 800; display: block; margin-bottom: 12px; line-height: 1.1;">ITAC 自动化底稿生成中心</span>
-            <p style="margin: 0 !important; font-size: 18px; opacity: 0.9; color: #FFFFFF !important; font-weight: 500;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>
+            <span style="color: #FFFFFF !important; font-size: 26px !important; font-weight: 800; display: block; margin-bottom: 4px; line-height: 1.2;">ITAC 自动化底稿生成中心</span>
+            <p style="margin: 0 !important; font-size: 14px; opacity: 0.8; color: #FFFFFF !important; font-weight: 500;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威审计技术部</p>
         </div>
     </div>
     <div style="text-align: right; color: white;">
