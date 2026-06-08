@@ -10,6 +10,10 @@ from core1_main import Core1Orchestrator
 from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
 from data_validator import DataValidator
+from dotenv import load_dotenv
+
+load_dotenv()
+DEFAULT_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
 # KPMG Heritage Branding Colors
 KPMG_BLUE = "#00338D"
@@ -162,7 +166,7 @@ with st.sidebar:
     if logo_b64:
         st.markdown(f'''<div class="logo-container"><img src="data:image/png;base64,{logo_b64}" class="massive-logo"></div>''', unsafe_allow_html=True)
     st.header("系统引擎配置")
-    deepseek_api_key = st.text_input("DeepSeek API Key", type="password")
+    deepseek_api_key = st.text_input("DeepSeek API Key", type="password", value=DEFAULT_KEY)
     if deepseek_api_key and deepseek_api_key != st.session_state.last_checked_key:
         from llm_client import LLMClient
         with st.spinner("验证密钥..."):
