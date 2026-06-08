@@ -346,8 +346,8 @@ if st.session_state.current_step == 1:
             entity_name = st.text_input("被审计单位", placeholder="输入公司名称")
             system_name = st.text_input("测试系统/版本", value="SAP S/4HANA v2023")
         with c2:
-            period_start = st.date_input("审计起始日期", value=datetime.date(2025, 1, 1))
-            period_end = st.date_input("审计截止日期", value=datetime.date(2025, 12, 31))
+            period_start = st.date_input("审计起始日期", value=datetime.date(2026, 1, 1))
+            period_end = st.date_input("审计截止日期", value=datetime.date(2026, 12, 31))
         st.write("")
         col_btn = st.columns([1, 1.5, 1])
         with col_btn[1]:
