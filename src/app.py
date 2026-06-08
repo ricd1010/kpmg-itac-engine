@@ -237,7 +237,7 @@ logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.pn
 logo_b64 = get_base64_image(logo_path)
 
 header_html = f"""
-<div style="background-color: {KPMG_BLUE}; padding: 3rem 4rem; border-radius: 16px; margin: 1rem 1rem 2rem 1rem; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 8px 24px rgba(0,51,141,0.2);">
+<div style="background-color: {KPMG_BLUE}; padding: 3rem 4rem; border-radius: 16px; margin: 0 0 2rem 0; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 8px 24px rgba(0,51,141,0.2);">
     <div style="display: flex; align-items: center;">
         <img src="data:image/png;base64,{logo_b64}" style="height: 65px; margin-right: 35px;">
         <div style="color: white; display: flex; flex-direction: column; justify-content: center;">
