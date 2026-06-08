@@ -201,6 +201,17 @@ st.markdown(f"""
         opacity: 0.9 !important;
         font-family: 'Open Sans', sans-serif !important;
     }}
+    
+    /* Enforce Logo Dimensions */
+    img.kpmg-header-logo {{
+        height: 65px !important;
+        min-height: 65px !important;
+        max-height: 65px !important;
+        width: auto !important;
+        margin-right: 35px !important;
+        transform: translateY(-2px) !important;
+        display: block !important;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -257,7 +268,7 @@ logo_b64 = get_base64_image(logo_path)
 header_html = f"""
 <div style="background-color: {KPMG_BLUE}; padding: 3rem 4rem; border-radius: 16px; margin: 0 0 2rem 0; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 8px 24px rgba(0,51,141,0.2);">
     <div style="display: flex; align-items: center;">
-        <img src="data:image/png;base64,{logo_b64}" style="height: 65px; margin-right: 35px; transform: translateY(-2px);">
+        <img src="data:image/png;base64,{logo_b64}" class="kpmg-header-logo">
         <div style="display: flex; flex-direction: column; justify-content: center;">
             <span class="kpmg-main-title">ITAC 自动化底稿生成中心</span>
             <span class="kpmg-sub-title">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威IT Audit</span>
