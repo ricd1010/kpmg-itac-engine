@@ -179,6 +179,28 @@ st.markdown(f"""
         align-items: center !important;
         height: 40px !important; /* Set a fixed height to align with selectbox */
     }}
+
+    /* Forceful Header Typography */
+    .kpmg-main-title {{
+        color: #FFFFFF !important;
+        font-size: 25px !important;
+        font-weight: 700 !important;
+        line-height: 1.2 !important;
+        display: block !important;
+        margin-bottom: 4px !important;
+        font-family: 'Open Sans', sans-serif !important;
+    }}
+
+    .kpmg-sub-title {{
+        color: #FFFFFF !important;
+        font-size: 17px !important;
+        font-weight: 400 !important;
+        line-height: 1.2 !important;
+        display: block !important;
+        margin: 0 !important;
+        opacity: 0.9 !important;
+        font-family: 'Open Sans', sans-serif !important;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -237,8 +259,8 @@ header_html = f"""
     <div style="display: flex; align-items: center;">
         <img src="data:image/png;base64,{logo_b64}" style="height: 65px; margin-right: 35px; transform: translateY(-5px);">
         <div style="display: flex; flex-direction: column; justify-content: center; transform: translateY(8px);">
-            <div style="color: #FFFFFF !important; font-size: 25px !important; font-weight: bold !important; margin-bottom: 2px !important; line-height: 1.2 !important; font-family: 'Open Sans', sans-serif !important;">ITAC 自动化底稿生成中心</div>
-            <div style="color: #FFFFFF !important; font-size: 17px !important; font-weight: 400 !important; margin: 0 !important; font-family: 'Open Sans', sans-serif !important;">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威IT Audit</div>
+            <span class="kpmg-main-title">ITAC 自动化底稿生成中心</span>
+            <span class="kpmg-sub-title">专业的 SAP 系统自动化控制测试辅助平台 | 毕马威IT Audit</span>
         </div>
     </div>
     <div style="text-align: right; color: white; transform: translateY(-12px);">
