@@ -188,14 +188,21 @@ if "show_balloons" not in st.session_state: st.session_state.show_balloons = Fal
 if "ocr_busy" not in st.session_state: st.session_state.ocr_busy = False
 
 # Background API Validation
-if not st.session_state.api_check_done and DEFAULT_KEY:
-    from llm_client import LLMClient
-    temp_client = LLMClient(api_key=DEFAULT_KEY)
-    is_ok, msg = temp_client.validate_api_key()
-    st.session_state.api_key_valid = is_ok
-    st.session_state.api_check_done = True
-    if is_ok: st.toast("🚀 KPMG AI Engine: DeepSeek API 已成功接入", icon="✅")
-    else: st.error(f"❌ AI 引擎连接失败: {msg}")
+if not st.session_state.api_check_done:
+    if DEFAULT_KEY:
+        from llm_client import LLMClient
+        temp_client = LLMClient(api_key=DEFAULT_KEY)
+        is_ok, msg = temp_client.validate_api_key()
+        st.session_state.api_key_valid = is_ok
+        st.session_state.api_check_done = True
+        if is_ok: 
+            st.toast("🚀 KPMG AI Engine: DeepSeek API 已成功接入", icon="✅")
+        else: 
+            st.error(f"❌ AI 引擎校验失败 (Key: {DEFAULT_KEY[:6]}...): {msg}")
+    else:
+        st.session_state.api_key_valid = False
+        st.session_state.api_check_done = True
+        st.info("ℹ️ 系统正处于 Mock Mode (未检测到内置 API Key)")
 
 # Isolated Data Directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
