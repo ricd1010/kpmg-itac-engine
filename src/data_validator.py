@@ -4,6 +4,8 @@ import re
 import os
 
 class DataValidator:
+    TEXT_ENCODINGS = ['utf-16', 'utf-8-sig', 'gb18030', 'latin1']
+
     REQUIRED_COLUMNS = {
         "SKAT": ["SAKNR", "TXT50"],
         "T030": ["KONTS", "KONTH"], 
@@ -13,11 +15,12 @@ class DataValidator:
 
     @staticmethod
     def validate_file(file_obj, file_type):
-        error_log = []
         df = None
         try:
             file_obj.seek(0)
             raw_content = file_obj.read()
+            if isinstance(raw_content, str):
+                raw_content = raw_content.encode("utf-8")
             
             # --- 阶段 1：Excel ---
             for eng in ['openpyxl', 'xlrd']:
@@ -25,12 +28,30 @@ class DataValidator:
                     df_raw = pd.read_excel(io.BytesIO(raw_content), header=None, engine=eng)
                     df = DataValidator._find_real_header(df_raw, file_type)
                     if df is not None: break
-                except Exception as e:
-                    error_log.append(f"Excel({eng})失败")
+                except Exception:
+                    pass
 
-            # --- 阶段 2：文本拆解 ---
+            # --- 阶段 2：分隔符文本（CSV/TSV 等） ---
             if df is None:
-                for enc in ['utf-16', 'utf-8-sig', 'gb18030', 'latin1']:
+                for enc in DataValidator.TEXT_ENCODINGS:
+                    try:
+                        df_raw = pd.read_csv(
+                            io.BytesIO(raw_content),
+                            header=None,
+                            encoding=enc,
+                            sep=None,
+                            engine="python",
+                            dtype=str,
+                            keep_default_na=False
+                        )
+                        df = DataValidator._find_real_header(df_raw, file_type)
+                        if df is not None: break
+                    except Exception:
+                        continue
+
+            # --- 阶段 3：固定宽度/空格文本拆解 ---
+            if df is None:
+                for enc in DataValidator.TEXT_ENCODINGS:
                     try:
                         text = raw_content.decode(enc)
                         lines = [l for l in text.splitlines() if l.strip()]
@@ -46,7 +67,7 @@ class DataValidator:
                             if df is not None: break
                     except: continue
 
-            # --- 阶段 3：HTML ---
+            # --- 阶段 4：HTML ---
             if df is None:
                 try:
                     df_raw = pd.read_html(io.BytesIO(raw_content))[0]
@@ -56,7 +77,7 @@ class DataValidator:
             if df is None:
                 return False, "无法读取文件，格式识别失败。", None
 
-            # --- 阶段 4：列名映射 ---
+            # --- 阶段 5：列名映射 ---
             df.columns = [str(c).strip() for c in df.columns]
             df = DataValidator._map_columns(df, file_type)
             
@@ -82,7 +103,7 @@ class DataValidator:
             if missing:
                 return False, f"表缺失必要字段: {', '.join(missing)}。检测到列: {df.columns.tolist()}", None
 
-            # --- 阶段 5：物理列清洗 (防重名) ---
+            # --- 阶段 6：物理列清洗 (防重名) ---
             new_col_names = []
             counts = {}
             for c in df.columns:
@@ -98,9 +119,9 @@ class DataValidator:
             for i in range(df.shape[1]):
                 col_name = df.columns[i]
                 if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC"]):
-                    df.iloc[:, i] = df.iloc[:, i].astype(str).str.strip().str.replace('\.0$', '', regex=True)
+                    df.iloc[:, i] = df.iloc[:, i].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
                 if any(k in col_name for k in ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]):
-                    s = df.iloc[:, i].astype(str).str.replace('[^0-9\.\-]', '', regex=True)
+                    s = df.iloc[:, i].astype(str).str.replace(r'[^0-9.\-]', '', regex=True)
                     df.iloc[:, i] = pd.to_numeric(s, errors='coerce').fillna(0.0)
 
             return True, "验证通过", df

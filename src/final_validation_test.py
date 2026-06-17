@@ -3,6 +3,9 @@ import os
 import pandas as pd
 import io
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # 确保加载本地 src
 sys.path.append(os.path.join(os.getcwd(), 'src'))
 from data_validator import DataValidator

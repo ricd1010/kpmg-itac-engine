@@ -2,6 +2,9 @@ import sys
 import os
 import pandas as pd
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # 确保能加载到 src 目录下的模块
 sys.path.append(os.path.join(os.getcwd(), 'src'))
 from data_validator import DataValidator
