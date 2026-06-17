@@ -6,6 +6,7 @@ import re
 import base64
 import time
 import uuid
+import html
 from core1_main import Core1Orchestrator
 from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
@@ -285,7 +286,6 @@ def render_scenario_preview(ranked, show_amount=False):
         return
 
     preview_df = pd.DataFrame(ranked)
-    preview_df["accounts_display"] = preview_df["accounts"]
     preview_df["已匹配名称"] = preview_df["accounts"].apply(
         lambda items: sum("未知科目" not in str(item) for item in items)
     )
@@ -294,25 +294,111 @@ def render_scenario_preview(ranked, show_amount=False):
     )
     total_accounts = int(preview_df["已匹配名称"].sum() + preview_df["未匹配名称"].sum())
     matched_accounts = int(preview_df["已匹配名称"].sum())
-    columns = ["name", "已匹配名称", "未匹配名称", "accounts_display"]
-    rename_map = {
-        "name": "审计场景",
-        "accounts_display": "关联科目",
-    }
-    if show_amount:
-        columns.insert(1, "total_value")
-        rename_map["total_value"] = "涉及金额"
 
-    st.dataframe(
-        preview_df[columns].rename(columns=rename_map),
-        width="stretch",
-        column_config={
-            "关联科目": st.column_config.ListColumn(
-                "关联科目",
-                help="映射到此场景的所有会计科目及当前可匹配到的科目名称",
-                width="large",
-            )
-        }
+    amount_header = "<th class='amount'>涉及金额</th>" if show_amount else ""
+    rows = []
+    for _, row in preview_df.iterrows():
+        account_chips = "".join(
+            f"<span class='account-chip'>{html.escape(str(account))}</span>"
+            for account in row.get("accounts", [])
+        ) or "<span class='empty-cell'>无关联科目</span>"
+        amount_cell = f"<td class='amount'>{float(row.get('total_value', 0)):,.2f}</td>" if show_amount else ""
+        rows.append(
+            "<tr>"
+            f"<td class='scenario-name'>{html.escape(str(row.get('name', '')))}</td>"
+            f"{amount_cell}"
+            f"<td class='count-cell'>{int(row.get('已匹配名称', 0))}</td>"
+            f"<td class='count-cell'>{int(row.get('未匹配名称', 0))}</td>"
+            f"<td class='accounts-cell'>{account_chips}</td>"
+            "</tr>"
+        )
+
+    st.markdown(
+        f"""
+        <style>
+        .scenario-preview-table {{
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            border: 1px solid #d8dde6;
+            border-radius: 8px;
+            overflow: hidden;
+            font-size: 14px;
+        }}
+        .scenario-preview-table th,
+        .scenario-preview-table td {{
+            border-bottom: 1px solid #e7eaf0;
+            border-right: 1px solid #e7eaf0;
+            padding: 10px 12px;
+            text-align: left;
+            vertical-align: top;
+        }}
+        .scenario-preview-table th {{
+            background: #f7f9fc;
+            color: #4d5a6a;
+            font-weight: 600;
+        }}
+        .scenario-preview-table tr:last-child td {{
+            border-bottom: 0;
+        }}
+        .scenario-preview-table th:last-child,
+        .scenario-preview-table td:last-child {{
+            border-right: 0;
+        }}
+        .scenario-preview-table .scenario-name {{
+            width: 15%;
+            min-width: 120px;
+            color: #1a1a1a;
+            font-weight: 600;
+        }}
+        .scenario-preview-table .amount {{
+            width: 12%;
+            min-width: 120px;
+            text-align: right;
+            white-space: nowrap;
+        }}
+        .scenario-preview-table .count-cell {{
+            width: 8%;
+            min-width: 82px;
+            text-align: right;
+            white-space: nowrap;
+        }}
+        .scenario-preview-table .accounts-cell {{
+            width: auto;
+            white-space: normal;
+            line-height: 1.9;
+        }}
+        .scenario-preview-table .account-chip {{
+            display: inline-block;
+            margin: 2px 5px 2px 0;
+            padding: 2px 8px;
+            max-width: 100%;
+            border-radius: 999px;
+            background: #f1f4f9;
+            color: #53627a;
+            overflow-wrap: anywhere;
+            white-space: normal;
+        }}
+        .scenario-preview-table .empty-cell {{
+            color: #8a94a6;
+        }}
+        </style>
+        <table class="scenario-preview-table">
+            <thead>
+                <tr>
+                    <th>审计场景</th>
+                    {amount_header}
+                    <th>已匹配名称</th>
+                    <th>未匹配名称</th>
+                    <th>关联科目</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows)}
+            </tbody>
+        </table>
+        """,
+        unsafe_allow_html=True,
     )
     if total_accounts and matched_accounts == 0:
         st.warning("当前 T030 场景科目没有在 SKAT 中找到对应名称；请确认上传的是完整 SKAT，或在下一步上传余额表补充科目名称。")
