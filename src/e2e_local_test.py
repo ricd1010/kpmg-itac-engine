@@ -4,6 +4,9 @@ import pandas as pd
 import uuid
 import shutil
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # Ensure local src is in path
 sys.path.append(os.path.join(os.getcwd(), 'src'))
 
@@ -53,15 +56,6 @@ def run_e2e_test():
     # 3. Core 1: Scenario Identification
     print("[3/5] 核心引擎 1: 场景识别与重要性排序...")
     c1 = Core1Orchestrator(session_dir)
-    account_roles = c1.mapper.load_and_classify()
-    print(f"   - 原始分类科目数: {len(account_roles)}")
-    
-    c1.verifier.load_configs()
-    print(f"   - T030 配置科目数: {len(c1.verifier.configured_accounts)}")
-    
-    verified_roles = c1.verifier.verify(account_roles)
-    print(f"   - T030 验证通过科目数: {len(verified_roles)}")
-
     ranked = c1.run()
     
     if not ranked:
@@ -69,7 +63,10 @@ def run_e2e_test():
         return False
     
     total_materiality = sum(r['total_value'] for r in ranked)
-    print(f"   ✅ 识别出 {len(ranked)} 个场景，总重要性金额: {total_materiality:,.2f}")
+    total_accounts = sum(len(r.get("raw_accounts", [])) for r in ranked)
+    total_company_splits = sum(len(r.get("company_values", [])) for r in ranked)
+    print(f"   ✅ 识别出 {len(ranked)} 个场景，关联科目 {total_accounts} 个，总重要性金额: {total_materiality:,.2f}")
+    print(f"   - 公司金额明细项: {total_company_splits}")
     if total_materiality == 0:
         print("❌ 逻辑报警: 重要性金额全为 0，请检查科目匹配逻辑！")
         return False
