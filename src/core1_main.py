@@ -30,6 +30,23 @@ class Core1Orchestrator:
             return None
         return s.lstrip('0') if s != '0' else '0'
 
+    def _parse_amt(self, val):
+        if pd.isna(val): return 0.0
+        cleaned = str(val).replace(',', '').strip()
+        if not cleaned or cleaned.lower() in {"nan", "none", "null"}:
+            return 0.0
+        try:
+            return abs(float(cleaned))
+        except ValueError:
+            return 0.0
+
+    def _company_label(self, val):
+        if pd.isna(val): return "未指定公司"
+        s = str(val).strip().split('.')[0]
+        if not s or s.lower() in {"nan", "none", "null"}:
+            return "未指定公司"
+        return s
+
     def run(self):
         # 1. 解析 T030，提取已配置的科目
         # 结果结构：{ scenario_name: set(account_codes) }
@@ -73,36 +90,56 @@ class Core1Orchestrator:
                         if k: acc_descs[k] = str(row[t_col]).strip()
             except: pass
 
-        # 3. 如果提供科目余额表，汇总发生额；同时用余额表 TXT50 补足 SKAT 缺失描述
+        # 3. 如果提供科目余额表，按公司代码取各自最后期间，汇总本年累计发生额；同时用余额表 TXT50 补足 SKAT 缺失描述
         tb_amounts = {}
+        tb_amounts_by_company = {}
         if os.path.exists(self.tb_path):
             try:
                 df_tb = pd.read_csv(self.tb_path, dtype=str)
                 df_tb.columns = [str(c).strip().upper() for c in df_tb.columns]
                 
-                # 寻找金额列
-                d_col = next((c for c in df_tb.columns if 'DEBIT' in c or '借方' in c), None)
-                c_col = next((c for c in df_tb.columns if 'CREDIT' in c or '贷方' in c), None)
-                s_col = next((c for c in df_tb.columns if 'SAKNR' in c or '科目' in c), None)
-                t_col = next((c for c in df_tb.columns if 'TXT50' in c or '描述' in c or '名称' in c), None)
+                d_col = 'DMBTR_DEBIT' if 'DMBTR_DEBIT' in df_tb.columns else next((c for c in df_tb.columns if 'DEBIT' in c or '借方' in c), None)
+                c_col = 'DMBTR_CREDIT' if 'DMBTR_CREDIT' in df_tb.columns else next((c for c in df_tb.columns if 'CREDIT' in c or '贷方' in c), None)
+                s_col = 'SAKNR' if 'SAKNR' in df_tb.columns else next((c for c in df_tb.columns if '科目' in c), None)
+                t_col = 'TXT50' if 'TXT50' in df_tb.columns else next((c for c in df_tb.columns if '描述' in c or '名称' in c), None)
+                company_col = next((c for c in df_tb.columns if c == 'COMPANY_CODE' or '公司代码' in c or 'BUKRS' in c), None)
+                period_col = next((c for c in df_tb.columns if c == 'PERIOD' or '会计期间' in c or '会计期' in c or 'MONAT' in c), None)
 
-                if s_col:
+                if s_col and t_col:
                     for _, row in df_tb.iterrows():
                         saknr = self._clean_acc(row[s_col])
+                        if not saknr or saknr in acc_descs:
+                            continue
+                        desc = str(row[t_col]).strip()
+                        if desc and desc.lower() != "nan":
+                            acc_descs[saknr] = desc
+
+                df_scope = df_tb
+                if period_col:
+                    df_scope = df_tb.copy()
+                    df_scope["_PERIOD_SORT"] = pd.to_numeric(
+                        df_scope[period_col].astype(str).str.replace(r'\.0$', '', regex=True),
+                        errors="coerce"
+                    )
+                    if df_scope["_PERIOD_SORT"].notna().any():
+                        if company_col:
+                            max_period = df_scope.groupby(company_col)["_PERIOD_SORT"].transform("max")
+                            df_scope = df_scope[df_scope["_PERIOD_SORT"].eq(max_period)]
+                        else:
+                            df_scope = df_scope[df_scope["_PERIOD_SORT"].eq(df_scope["_PERIOD_SORT"].max())]
+
+                if s_col:
+                    for _, row in df_scope.iterrows():
+                        saknr = self._clean_acc(row[s_col])
                         if not saknr: continue
-                        if t_col and saknr not in acc_descs:
-                            desc = str(row[t_col]).strip()
-                            if desc and desc.lower() != "nan":
-                                acc_descs[saknr] = desc
-                        
-                        def parse_amt(v):
-                            if pd.isna(v): return 0.0
-                            return abs(float(str(v).replace(',', '')))
                         
                         val = 0.0
-                        if d_col: val += parse_amt(row[d_col])
-                        if c_col: val += parse_amt(row[c_col])
+                        if d_col: val += self._parse_amt(row[d_col])
+                        if c_col: val += self._parse_amt(row[c_col])
                         tb_amounts[saknr] = tb_amounts.get(saknr, 0) + val
+                        company_code = self._company_label(row[company_col]) if company_col else "未指定公司"
+                        tb_amounts_by_company.setdefault(company_code, {})
+                        tb_amounts_by_company[company_code][saknr] = tb_amounts_by_company[company_code].get(saknr, 0) + val
             except Exception as e:
                 print(f"Core 1 - Trial Balance 汇总失败: {e}")
 
@@ -111,12 +148,22 @@ class Core1Orchestrator:
         for name, acc_set in scenario_accounts.items():
             acc_list = sorted(list(acc_set))
             display_accounts = [f"{acc} ({acc_descs.get(acc, '未知科目')})" for acc in acc_list]
+            company_values = []
+            for company_code, amount_map in tb_amounts_by_company.items():
+                company_total = sum(amount_map.get(acc, 0) for acc in acc_list)
+                if company_total:
+                    company_values.append({
+                        "company_code": company_code,
+                        "total_value": company_total
+                    })
+            company_values.sort(key=lambda x: x["total_value"], reverse=True)
 
             results.append({
                 "name": name,
                 "accounts": display_accounts,
                 "raw_accounts": acc_list,
-                "total_value": sum(tb_amounts.get(acc, 0) for acc in acc_list)
+                "total_value": sum(tb_amounts.get(acc, 0) for acc in acc_list),
+                "company_values": company_values
             })
 
         results.sort(key=lambda x: x['total_value'], reverse=True)

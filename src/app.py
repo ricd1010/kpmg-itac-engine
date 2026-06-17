@@ -296,14 +296,22 @@ def render_scenario_preview(ranked, show_amount=False):
     total_accounts = int(preview_df["已匹配名称"].sum() + preview_df["未匹配名称"].sum())
     matched_accounts = int(preview_df["已匹配名称"].sum())
 
-    amount_header = "<th class='amount'>涉及金额</th>" if show_amount else ""
+    amount_header = "<th class='amount'>涉及金额</th><th>公司金额明细</th>" if show_amount else ""
     rows = []
     for _, row in preview_df.iterrows():
         account_chips = "".join(
             f"<span class='account-chip'>{html.escape(str(account))}</span>"
             for account in row.get("accounts", [])
         ) or "<span class='empty-cell'>无关联科目</span>"
-        amount_cell = f"<td class='amount'>{float(row.get('total_value', 0)):,.2f}</td>" if show_amount else ""
+        company_values = row.get("company_values") or []
+        company_chips = "".join(
+            f"<span class='company-chip'>{html.escape(str(item.get('company_code', '未指定公司')))}: {float(item.get('total_value', 0)):,.2f}</span>"
+            for item in company_values
+        ) or "<span class='empty-cell'>无金额明细</span>"
+        amount_cell = (
+            f"<td class='amount'>{float(row.get('total_value', 0)):,.2f}</td>"
+            f"<td class='company-cell'>{company_chips}</td>"
+        ) if show_amount else ""
         rows.append(
             "<tr>"
             f"<td class='scenario-name'>{html.escape(str(row.get('name', '')))}</td>"
@@ -368,6 +376,12 @@ def render_scenario_preview(ranked, show_amount=False):
             white-space: normal;
             line-height: 1.9;
         }}
+        .scenario-preview-table .company-cell {{
+            width: 22%;
+            min-width: 220px;
+            white-space: normal;
+            line-height: 1.9;
+        }}
         .scenario-preview-table .account-chip {{
             display: inline-block;
             margin: 2px 5px 2px 0;
@@ -378,6 +392,15 @@ def render_scenario_preview(ranked, show_amount=False):
             color: #53627a;
             overflow-wrap: anywhere;
             white-space: normal;
+        }}
+        .scenario-preview-table .company-chip {{
+            display: inline-block;
+            margin: 2px 5px 2px 0;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #e8f5f5;
+            color: #006b6b;
+            white-space: nowrap;
         }}
         .scenario-preview-table .empty-cell {{
             color: #8a94a6;
@@ -445,20 +468,7 @@ if st.session_state.results:
     with t1:
         st.subheader("识别场景与重要性排序")
         if res["ranked"]:
-            df_ranked = pd.DataFrame(res["ranked"])
-            # Keep accounts as a list for native ListColumn support
-            df_ranked["accounts_display"] = df_ranked["accounts"]
-            st.dataframe(
-                df_ranked[["name", "total_value", "accounts_display"]].rename(columns={"name": "审计场景", "total_value": "涉及金额", "accounts_display": "关联科目"}), 
-                width="stretch",
-                column_config={
-                    "关联科目": st.column_config.ListColumn(
-                        "关联科目",
-                        help="映射到此场景的所有会计科目",
-                        width="large",
-                    )
-                }
-            )
+            render_scenario_preview(res["ranked"], show_amount=True)
     with t2:
         st.subheader("TOD/TOE 穿行测试描述")
         for it in res["di"]:

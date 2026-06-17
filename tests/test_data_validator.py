@@ -66,3 +66,24 @@ def test_t030_keeps_account_modifier_separate_from_account_code():
     gbb_vax = df[(df["KTOSL"] == "GBB") & (df["KOMOK"] == "VAX")]
     assert not gbb_vax.empty
     assert gbb_vax["KONTS"].astype(str).str.match(r"^\d{10}$").all()
+
+
+def test_trial_balance_maps_company_period_and_ytd_columns(tmp_path):
+    tb_path = tmp_path / "trial_balance.csv"
+    tb_path.write_text(
+        "\n".join([
+            "会计年度,会计期间,月份,公司代码,科目编码,科目名称,本月借方发生额,本月贷方发生额,本年借方累计,本年贷方累计",
+            "2025,202501,01,4000,1403000000,原材料,10,-10,100,-100",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(tb_path), "TrialBalance")
+
+    assert ok, msg
+    assert {"COMPANY_CODE", "PERIOD", "SAKNR", "TXT50", "DMBTR_DEBIT", "DMBTR_CREDIT"}.issubset(df.columns)
+    assert df.iloc[0]["COMPANY_CODE"] == "4000"
+    assert df.iloc[0]["PERIOD"] == "202501"
+    assert df.iloc[0]["SAKNR"] == "1403000000"
+    assert df.iloc[0]["DMBTR_DEBIT"] == 100.0
+    assert df.iloc[0]["DMBTR_CREDIT"] == -100.0
