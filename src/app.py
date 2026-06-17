@@ -236,6 +236,11 @@ if "api_key_valid" not in st.session_state: st.session_state.api_key_valid = Fal
 if "api_check_done" not in st.session_state: st.session_state.api_check_done = False
 if "show_balloons" not in st.session_state: st.session_state.show_balloons = False
 if "ocr_busy" not in st.session_state: st.session_state.ocr_busy = False
+if "base_files_ready" not in st.session_state: st.session_state.base_files_ready = False
+if "base_file_signature" not in st.session_state: st.session_state.base_file_signature = None
+if "trial_balance_ready" not in st.session_state: st.session_state.trial_balance_ready = False
+if "trial_balance_signature" not in st.session_state: st.session_state.trial_balance_signature = None
+if "scenario_preview" not in st.session_state: st.session_state.scenario_preview = []
 
 # Background API Validation
 if not st.session_state.api_check_done:
@@ -259,6 +264,50 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SESSION_DATA_DIR = os.path.join(BASE_DIR, "data", "sessions", st.session_state.session_id)
 if not os.path.exists(SESSION_DATA_DIR):
     os.makedirs(SESSION_DATA_DIR, exist_ok=True)
+
+def upload_signature(*files):
+    return tuple((f.name, getattr(f, "size", None)) for f in files if f is not None)
+
+def validate_upload_to_session(uploaded_file, file_type):
+    is_valid, msg, df = DataValidator.validate_file(uploaded_file, file_type)
+    if is_valid:
+        df.to_csv(os.path.join(SESSION_DATA_DIR, f"{file_type}.csv"), index=False, encoding="utf-8-sig")
+    return is_valid, msg
+
+def refresh_scenario_preview():
+    ranked = Core1Orchestrator(SESSION_DATA_DIR).run()
+    st.session_state.scenario_preview = ranked
+    return ranked
+
+def render_scenario_preview(ranked):
+    if not ranked:
+        st.warning("尚未识别到场景，请检查 T030 配置表。")
+        return
+
+    preview_df = pd.DataFrame(ranked)
+    preview_df["accounts_display"] = preview_df["accounts"]
+    preview_df["已匹配名称"] = preview_df["accounts"].apply(
+        lambda items: sum("未知科目" not in str(item) for item in items)
+    )
+    preview_df["未匹配名称"] = preview_df["accounts"].apply(
+        lambda items: sum("未知科目" in str(item) for item in items)
+    )
+    st.dataframe(
+        preview_df[["name", "total_value", "已匹配名称", "未匹配名称", "accounts_display"]]
+        .rename(columns={
+            "name": "审计场景",
+            "total_value": "涉及金额",
+            "accounts_display": "关联科目",
+        }),
+        width="stretch",
+        column_config={
+            "关联科目": st.column_config.ListColumn(
+                "关联科目",
+                help="映射到此场景的所有会计科目及当前可匹配到的科目名称",
+                width="large",
+            )
+        }
+    )
 
 # Main Header Area with Logo
 logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.png")
@@ -308,7 +357,7 @@ if st.session_state.results:
             df_ranked["accounts_display"] = df_ranked["accounts"]
             st.dataframe(
                 df_ranked[["name", "total_value", "accounts_display"]].rename(columns={"name": "审计场景", "total_value": "涉及金额", "accounts_display": "关联科目"}), 
-                use_container_width=True,
+                width="stretch",
                 column_config={
                     "关联科目": st.column_config.ListColumn(
                         "关联科目",
@@ -325,10 +374,21 @@ if st.session_state.results:
     with t3:
         st.subheader("最终成果文件导出")
         with open(res["report_path"], "rb") as f:
-            st.download_button(label="📥 下载最终 Excel 审计底稿", data=f.read(), file_name=f"ITAC_WP_{st.session_state.audit_context.get('entity_name','Audit')}.xlsx", use_container_width=True)
+            st.download_button(label="📥 下载最终 Excel 审计底稿", data=f.read(), file_name=f"ITAC_WP_{st.session_state.audit_context.get('entity_name','Audit')}.xlsx", width="stretch")
         st.write("") 
-        if st.button("🔄 开启新的审计任务", use_container_width=True):
-            st.session_state.current_step = 1; st.session_state.results = None; st.session_state.ocr_samples = []; st.session_state.processed_image_names = set(); st.session_state.show_balloons = False; st.rerun()
+        if st.button("🔄 开启新的审计任务", width="stretch"):
+            st.session_state.session_id = str(uuid.uuid4())
+            st.session_state.current_step = 1
+            st.session_state.results = None
+            st.session_state.ocr_samples = []
+            st.session_state.processed_image_names = set()
+            st.session_state.show_balloons = False
+            st.session_state.base_files_ready = False
+            st.session_state.base_file_signature = None
+            st.session_state.trial_balance_ready = False
+            st.session_state.trial_balance_signature = None
+            st.session_state.scenario_preview = []
+            st.rerun()
         st.write("---"); st.caption("© 2026 KPMG. All rights reserved. | IT Audit Technology & Innovation")
     st.stop()
 
@@ -351,7 +411,7 @@ if st.session_state.current_step == 1:
         st.write("")
         col_btn = st.columns([1, 1.5, 1])
         with col_btn[1]:
-            if st.form_submit_button("下一步：上传清单", use_container_width=True):
+            if st.form_submit_button("下一步：上传清单", width="stretch"):
                 if entity_name and system_name:
                     st.session_state.audit_context = {"entity_name": entity_name, "system_name": system_name, "period_start": str(period_start), "period_end": str(period_end)}
                     st.session_state.current_step = 2; st.rerun()
@@ -359,35 +419,83 @@ if st.session_state.current_step == 1:
 
 # --- STEP 2 ---
 elif st.session_state.current_step == 2:
-    st.subheader("步骤 2: 上传基础数据表 (T030, SKAT, 余额表)")
-    u1, u2, u3 = st.columns(3)
+    st.subheader("步骤 2: 上传配置表并预览场景匹配")
+    st.caption("先上传 T030 与 SKAT，即可查看各场景映射到的科目及当前可匹配到的科目名称。余额表可在下一步选择上传。")
+    u1, u2 = st.columns(2)
     with u1: t030_file = st.file_uploader("T030 配置表", type=["csv", "xlsx", "xls"])
     with u2: skat_file = st.file_uploader("SKAT 科目表", type=["csv", "xlsx", "xls"])
-    with u3: tb_file = st.file_uploader("余额表", type=["csv", "xlsx", "xls"])
+
+    if t030_file and skat_file:
+        base_signature = upload_signature(t030_file, skat_file)
+        if base_signature != st.session_state.base_file_signature:
+            with st.spinner("正在解析 T030/SKAT 并生成场景匹配预览..."):
+                all_v = True
+                for f_t, f_o in {"T030": t030_file, "SKAT": skat_file}.items():
+                    is_v, msg = validate_upload_to_session(f_o, f_t)
+                    if not is_v:
+                        st.error(f"❌ {f_t} 失败: {msg}")
+                        all_v = False
+                        break
+                if all_v:
+                    tb_path = os.path.join(SESSION_DATA_DIR, "TrialBalance.csv")
+                    if os.path.exists(tb_path):
+                        os.remove(tb_path)
+                    st.session_state.base_files_ready = True
+                    st.session_state.base_file_signature = base_signature
+                    st.session_state.trial_balance_ready = False
+                    st.session_state.trial_balance_signature = None
+                    refresh_scenario_preview()
+                    st.success("已生成场景匹配预览。")
+    elif st.session_state.base_files_ready:
+        st.info("当前显示的是本会话已保存的 T030/SKAT 预览。")
+    else:
+        st.info("请先上传 T030 配置表和 SKAT 科目表。")
+
+    if st.session_state.base_files_ready:
+        st.write("**场景科目匹配预览**")
+        render_scenario_preview(st.session_state.scenario_preview)
+        if any("未知科目" in str(acc) for row in st.session_state.scenario_preview for acc in row.get("accounts", [])):
+            st.caption("提示：未知科目表示该科目未在当前 SKAT 中找到名称；后续上传余额表时可继续补充部分描述和金额。")
+
     st.write("---")
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
-        if st.button("返回上一步", use_container_width=True): st.session_state.current_step = 1; st.rerun()
+        if st.button("返回上一步", width="stretch"): st.session_state.current_step = 1; st.rerun()
     with nav_cols[2]:
-        if st.button("确认并下一步", use_container_width=True):
-            if t030_file and skat_file and tb_file:
-                with st.spinner("数据校验中..."):
-                    all_v = True
-                    for f_t, f_o in {"T030": t030_file, "SKAT": skat_file, "TrialBalance": tb_file}.items():
-                        is_v, msg, df = DataValidator.validate_file(f_o, f_t)
-                        if not is_v: st.error(f"❌ {f_t} 失败: {msg}"); all_v = False; break
-                        # Force isolated output path
-                        df.to_csv(os.path.join(SESSION_DATA_DIR, f"{f_t}.csv"), index=False, encoding='utf-8-sig')
-                    if all_v: st.session_state.current_step = 3; st.rerun()
-            else: st.warning("❗ 请上传全部表格。")
+        if st.button("确认场景匹配并下一步", width="stretch", disabled=not st.session_state.base_files_ready):
+            st.session_state.current_step = 3; st.rerun()
 
 # --- STEP 3 ---
 elif st.session_state.current_step == 3:
-    if "ocr_engine_inst" not in st.session_state:
-        with st.status("🏗️ 初始化本地 OCR 引擎..."):
-            from ocr_processor import OCRProcessor
-            st.session_state.ocr_engine_inst = OCRProcessor()
-    st.subheader("步骤 3: 采集审计样本证据")
+    if not st.session_state.base_files_ready:
+        st.warning("请先完成 T030/SKAT 场景匹配预览。")
+        if st.button("返回上传配置表", width="stretch"):
+            st.session_state.current_step = 2; st.rerun()
+        st.stop()
+
+    st.subheader("步骤 3: 补充余额表并采集审计样本证据")
+    tb_file = st.file_uploader("可选：余额表（用于补充金额排序和部分科目名称）", type=["csv", "xlsx", "xls"])
+    if tb_file:
+        tb_signature = upload_signature(tb_file)
+        if tb_signature != st.session_state.trial_balance_signature:
+            with st.spinner("正在校验余额表并刷新场景金额..."):
+                is_v, msg = validate_upload_to_session(tb_file, "TrialBalance")
+                if is_v:
+                    st.session_state.trial_balance_ready = True
+                    st.session_state.trial_balance_signature = tb_signature
+                    refresh_scenario_preview()
+                    st.success("余额表已加载，场景金额和可补充的科目名称已刷新。")
+                else:
+                    st.error(f"❌ TrialBalance 失败: {msg}")
+    elif st.session_state.trial_balance_ready:
+        st.success("已加载本会话的余额表。")
+    else:
+        st.info("可以先跳过余额表，直接上传样本或凭证截图生成底稿；金额排序将暂按 0 展示。")
+
+    with st.expander("查看当前场景匹配结果", expanded=not st.session_state.trial_balance_ready):
+        render_scenario_preview(st.session_state.scenario_preview)
+
+    st.write("---")
     s1, s2 = st.columns(2)
     with s1: samples_file = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"])
     with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
@@ -395,6 +503,10 @@ elif st.session_state.current_step == 3:
         # Check if there are NEW images to process
         new_imgs = [img for img in voucher_images if img.name not in st.session_state.processed_image_names]
         if new_imgs:
+            if "ocr_engine_inst" not in st.session_state:
+                with st.status("🏗️ 初始化本地 OCR 引擎..."):
+                    from ocr_processor import OCRProcessor
+                    st.session_state.ocr_engine_inst = OCRProcessor()
             st.session_state.ocr_busy = True
             try:
                 for img in new_imgs:
@@ -420,15 +532,15 @@ elif st.session_state.current_step == 3:
                 st.rerun() # Refresh to enable button
     if st.session_state.ocr_samples:
         st.write("**📋 已录入样本预览**")
-        st.dataframe(pd.DataFrame(st.session_state.ocr_samples), use_container_width=True)
+        st.dataframe(pd.DataFrame(st.session_state.ocr_samples), width="stretch")
     st.write("---")
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
-        if st.button("返回上一步", use_container_width=True): st.session_state.current_step = 2; st.rerun()
+        if st.button("返回上一步", width="stretch"): st.session_state.current_step = 2; st.rerun()
     with nav_cols[2]:
         # Only enable button if ocr is not busy AND we have either a file or OCR samples
         btn_disabled = st.session_state.ocr_busy or (not samples_file and not st.session_state.ocr_samples)
-        if st.button("🚀 生成最终底稿", use_container_width=True, disabled=btn_disabled):
+        if st.button("🚀 生成最终底稿", width="stretch", disabled=btn_disabled):
             with st.spinner("AI 正在撰写穿行测试描述..."):
                 if samples_file:
                     is_v, msg, s_df = DataValidator.validate_file(samples_file, "Samples")
@@ -443,8 +555,12 @@ elif st.session_state.current_step == 3:
                 c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
                 
                 # Debug: Show internal stats if results are weird
-                if not ranked or sum(r['total_value'] for r in ranked) == 0:
+                if not ranked:
                     st.warning(f"⚠️ 核心引擎警告: 未能匹配到任何活跃的审计场景。请检查上传清单的内容。")
+                elif not os.path.exists(os.path.join(SESSION_DATA_DIR, "TrialBalance.csv")):
+                    st.info("未上传余额表，本次底稿的场景金额将暂按 0 展示。")
+                elif sum(r['total_value'] for r in ranked) == 0:
+                    st.warning("⚠️ 核心引擎警告: 余额表金额未能匹配到已识别场景，请检查余额表科目范围。")
                 
                 c2 = Core2Orchestrator(SESSION_DATA_DIR)
                 # Use DEFAULT_KEY
