@@ -52,3 +52,17 @@ def test_wide_samples_csv_is_accepted():
     assert {"DOC_NUM", "SAKNR", "AMOUNT", "KTOSL"}.issubset(df.columns)
     assert df.iloc[0]["DOC_NUM"] == "8174291462"
     assert df.iloc[0]["AMOUNT"] == -13.21
+
+
+def test_t030_keeps_account_modifier_separate_from_account_code():
+    ok, msg, df = DataValidator.validate_file(
+        MockUpload(REPO_ROOT / "data" / "xinxiwang" / "T030 HEBING.xlsx"),
+        "T030",
+    )
+
+    assert ok, msg
+    assert {"KTOSL", "KOMOK", "KONTS", "KONTH"}.issubset(df.columns)
+
+    gbb_vax = df[(df["KTOSL"] == "GBB") & (df["KOMOK"] == "VAX")]
+    assert not gbb_vax.empty
+    assert gbb_vax["KONTS"].astype(str).str.match(r"^\d{10}$").all()

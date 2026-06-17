@@ -198,10 +198,8 @@ class DataValidator:
 
     @staticmethod
     def _map_columns(df, file_type):
-        MAPPING = {
-            "KONTS": ["konts", "借方科目", "总帐科目", "总账科目"],
-            "KONTH": ["konth", "贷方科目", "总帐科目", "总账科目"],
-            "SAKNR": ["saknr", "科目", "总账科目", "总帐科目", "G/L Account"],
+        common_mapping = {
+            "SAKNR": ["saknr", "总账科目", "总帐科目", "G/L Account", "科目"],
             "TXT50": ["txt50", "科目描述", "科目名称", "短文本", "总分类帐名称"],
             "DMBTR_DEBIT": ["dmbtr_debit", "借方金额", "在制表期间的借方余额", "已结转余额", "借方", "前一期间的余额"],
             "DMBTR_CREDIT": ["dmbtr_credit", "贷方金额", "报表期间的贷方余额", "累计余额", "贷方"],
@@ -212,21 +210,35 @@ class DataValidator:
             "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
             "KOMOK": ["komok", "科目修改", "修改码"]
         }
-        final_names = {}
+        if file_type == "T030":
+            mapping = {
+                "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
+                "KOMOK": ["komok", "科目修改", "修改码"],
+                "KONTS": ["konts", "借方科目", "总帐科目", "总账科目"],
+                "KONTH": ["konth", "贷方科目", "总帐科目", "总账科目"],
+            }
+        else:
+            mapping = common_mapping
+
+        new_columns = [str(c).strip() for c in df.columns]
         used_indices = set()
-        for target, aliases in MAPPING.items():
+        for target, aliases in mapping.items():
             found = False
             for alias in aliases:
-                for idx, actual in enumerate(df.columns):
+                for idx, actual in enumerate(new_columns):
                     if idx in used_indices: continue
                     a_str = str(actual).lower()
                     al_str = alias.lower()
-                    if al_str == a_str or al_str in a_str:
-                        final_names[actual] = target
+                    exact_match = al_str == a_str
+                    contains_match = al_str not in {"科目"} and al_str in a_str
+                    if exact_match or contains_match:
+                        new_columns[idx] = target
                         used_indices.add(idx)
                         found = True; break
                 if found: break
-        return df.rename(columns=final_names)
+        df = df.copy()
+        df.columns = new_columns
+        return df
 
     @staticmethod
     def validate_audit_context(entity_name, system_name, start_date, end_date):

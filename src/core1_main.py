@@ -26,6 +26,8 @@ class Core1Orchestrator:
     def _clean_acc(self, val):
         if pd.isna(val): return None
         s = str(val).strip().split('.')[0]
+        if not s or s.lower() in {"nan", "none", "null"}:
+            return None
         return s.lstrip('0') if s != '0' else '0'
 
     def run(self):
@@ -71,38 +73,27 @@ class Core1Orchestrator:
                         if k: acc_descs[k] = str(row[t_col]).strip()
             except: pass
 
-        # 3. 汇总已识别场景 (独立输出已配置场景清单)
-        results = []
-        for name, acc_set in scenario_accounts.items():
-            if not acc_set: continue
-            
-            acc_list = sorted(list(acc_set))
-            # 格式化描述用于前端展示
-            display_accounts = [f"{acc} ({acc_descs.get(acc, '未知科目')})" for acc in acc_list]
-            
-            results.append({
-                "name": name,
-                "accounts": display_accounts, # 前端期待格式化的列表
-                "raw_accounts": acc_list,     # 后续金额匹配用原始编码
-                "total_value": 0.0
-            })
-
-        # 4. 如果提供科目余额表，汇总发生额并排序
-        if os.path.exists(self.tb_path) and results:
+        # 3. 如果提供科目余额表，汇总发生额；同时用余额表 TXT50 补足 SKAT 缺失描述
+        tb_amounts = {}
+        if os.path.exists(self.tb_path):
             try:
                 df_tb = pd.read_csv(self.tb_path, dtype=str)
                 df_tb.columns = [str(c).strip().upper() for c in df_tb.columns]
                 
-                tb_amounts = {}
                 # 寻找金额列
                 d_col = next((c for c in df_tb.columns if 'DEBIT' in c or '借方' in c), None)
                 c_col = next((c for c in df_tb.columns if 'CREDIT' in c or '贷方' in c), None)
                 s_col = next((c for c in df_tb.columns if 'SAKNR' in c or '科目' in c), None)
+                t_col = next((c for c in df_tb.columns if 'TXT50' in c or '描述' in c or '名称' in c), None)
 
                 if s_col:
                     for _, row in df_tb.iterrows():
                         saknr = self._clean_acc(row[s_col])
                         if not saknr: continue
+                        if t_col and saknr not in acc_descs:
+                            desc = str(row[t_col]).strip()
+                            if desc and desc.lower() != "nan":
+                                acc_descs[saknr] = desc
                         
                         def parse_amt(v):
                             if pd.isna(v): return 0.0
@@ -112,16 +103,23 @@ class Core1Orchestrator:
                         if d_col: val += parse_amt(row[d_col])
                         if c_col: val += parse_amt(row[c_col])
                         tb_amounts[saknr] = tb_amounts.get(saknr, 0) + val
-                
-                # 更新场景重要性
-                for res in results:
-                    res['total_value'] = sum(tb_amounts.get(acc, 0) for acc in res['raw_accounts'])
-                
-                # 依金额倒序排列
-                results.sort(key=lambda x: x['total_value'], reverse=True)
             except Exception as e:
                 print(f"Core 1 - Trial Balance 汇总失败: {e}")
-                
+
+        # 4. 保留全部预设场景；未命中的场景显示为空科目、金额为 0
+        results = []
+        for name, acc_set in scenario_accounts.items():
+            acc_list = sorted(list(acc_set))
+            display_accounts = [f"{acc} ({acc_descs.get(acc, '未知科目')})" for acc in acc_list]
+
+            results.append({
+                "name": name,
+                "accounts": display_accounts,
+                "raw_accounts": acc_list,
+                "total_value": sum(tb_amounts.get(acc, 0) for acc in acc_list)
+            })
+
+        results.sort(key=lambda x: x['total_value'], reverse=True)
         return results
 
 if __name__ == "__main__":

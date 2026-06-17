@@ -12,7 +12,7 @@ def test_core1_scenario_identification():
     orchestrator = Core1Orchestrator(data_dir)
     results = orchestrator.run()
     
-    assert len(results) > 0
+    assert len(results) == 10
     scenario_names = [res['name'] for res in results]
     assert "销售发货" in scenario_names
     
