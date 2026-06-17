@@ -7,6 +7,7 @@ import base64
 import time
 import uuid
 import html
+import textwrap
 from core1_main import Core1Orchestrator
 from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
@@ -313,8 +314,7 @@ def render_scenario_preview(ranked, show_amount=False):
             "</tr>"
         )
 
-    st.markdown(
-        f"""
+    table_html = textwrap.dedent(f"""
         <style>
         .scenario-preview-table {{
             width: 100%;
@@ -397,9 +397,8 @@ def render_scenario_preview(ranked, show_amount=False):
                 {''.join(rows)}
             </tbody>
         </table>
-        """,
-        unsafe_allow_html=True,
-    )
+        """).strip()
+    st.html(table_html)
     if total_accounts and matched_accounts == 0:
         st.warning("当前 T030 场景科目没有在 SKAT 中找到对应名称；请确认上传的是完整 SKAT，或在下一步上传余额表补充科目名称。")
 
