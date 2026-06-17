@@ -279,7 +279,7 @@ def refresh_scenario_preview():
     st.session_state.scenario_preview = ranked
     return ranked
 
-def render_scenario_preview(ranked):
+def render_scenario_preview(ranked, show_amount=False):
     if not ranked:
         st.warning("尚未识别到场景，请检查 T030 配置表。")
         return
@@ -292,13 +292,19 @@ def render_scenario_preview(ranked):
     preview_df["未匹配名称"] = preview_df["accounts"].apply(
         lambda items: sum("未知科目" in str(item) for item in items)
     )
+    total_accounts = int(preview_df["已匹配名称"].sum() + preview_df["未匹配名称"].sum())
+    matched_accounts = int(preview_df["已匹配名称"].sum())
+    columns = ["name", "已匹配名称", "未匹配名称", "accounts_display"]
+    rename_map = {
+        "name": "审计场景",
+        "accounts_display": "关联科目",
+    }
+    if show_amount:
+        columns.insert(1, "total_value")
+        rename_map["total_value"] = "涉及金额"
+
     st.dataframe(
-        preview_df[["name", "total_value", "已匹配名称", "未匹配名称", "accounts_display"]]
-        .rename(columns={
-            "name": "审计场景",
-            "total_value": "涉及金额",
-            "accounts_display": "关联科目",
-        }),
+        preview_df[columns].rename(columns=rename_map),
         width="stretch",
         column_config={
             "关联科目": st.column_config.ListColumn(
@@ -308,6 +314,8 @@ def render_scenario_preview(ranked):
             )
         }
     )
+    if total_accounts and matched_accounts == 0:
+        st.warning("当前 T030 场景科目没有在 SKAT 中找到对应名称；请确认上传的是完整 SKAT，或在下一步上传余额表补充科目名称。")
 
 # Main Header Area with Logo
 logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.png")
@@ -453,7 +461,7 @@ elif st.session_state.current_step == 2:
 
     if st.session_state.base_files_ready:
         st.write("**场景科目匹配预览**")
-        render_scenario_preview(st.session_state.scenario_preview)
+        render_scenario_preview(st.session_state.scenario_preview, show_amount=False)
         if any("未知科目" in str(acc) for row in st.session_state.scenario_preview for acc in row.get("accounts", [])):
             st.caption("提示：未知科目表示该科目未在当前 SKAT 中找到名称；后续上传余额表时可继续补充部分描述和金额。")
 
@@ -490,10 +498,10 @@ elif st.session_state.current_step == 3:
     elif st.session_state.trial_balance_ready:
         st.success("已加载本会话的余额表。")
     else:
-        st.info("可以先跳过余额表，直接上传样本或凭证截图生成底稿；金额排序将暂按 0 展示。")
+        st.info("可以先跳过余额表，直接上传样本或凭证截图生成底稿；金额列将在上传余额表后显示。")
 
     with st.expander("查看当前场景匹配结果", expanded=not st.session_state.trial_balance_ready):
-        render_scenario_preview(st.session_state.scenario_preview)
+        render_scenario_preview(st.session_state.scenario_preview, show_amount=st.session_state.trial_balance_ready)
 
     st.write("---")
     s1, s2 = st.columns(2)
