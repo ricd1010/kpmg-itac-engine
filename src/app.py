@@ -296,26 +296,168 @@ def render_scenario_preview(ranked, show_amount=False):
     total_accounts = int(preview_df["已匹配名称"].sum() + preview_df["未匹配名称"].sum())
     matched_accounts = int(preview_df["已匹配名称"].sum())
 
-    amount_header = "<th class='amount'>涉及金额</th><th>公司金额明细</th>" if show_amount else ""
+    if show_amount:
+        company_totals = {}
+        for result in ranked:
+            for item in result.get("company_values", []):
+                company_code = str(item.get("company_code", "未指定公司"))
+                company_totals[company_code] = company_totals.get(company_code, 0.0) + float(item.get("total_value", 0) or 0)
+        company_codes = sorted(company_totals, key=lambda code: company_totals[code], reverse=True)
+
+        sections = []
+        for idx, company_code in enumerate(company_codes):
+            scenario_rows = []
+            for result in ranked:
+                company_item = next(
+                    (item for item in result.get("company_values", []) if str(item.get("company_code", "未指定公司")) == company_code),
+                    None
+                )
+                scenario_amount = float(company_item.get("total_value", 0) or 0) if company_item else 0.0
+                account_values = company_item.get("account_values", []) if company_item else []
+                if account_values:
+                    account_html = "".join(
+                        "<span class='account-detail-chip'>"
+                        f"<span class='account-code'>{html.escape(str(account.get('account', '')))}</span>"
+                        f"<span class='account-desc'>{html.escape(str(account.get('description', '未知科目')))}</span>"
+                        f"<span class='account-amount'>{float(account.get('total_value', 0) or 0):,.2f}</span>"
+                        "</span>"
+                        for account in account_values
+                    )
+                else:
+                    account_html = "<span class='empty-cell'>该公司最后期间未命中此场景科目</span>"
+                scenario_rows.append(
+                    "<tr>"
+                    f"<td class='scenario-name'>{html.escape(str(result.get('name', '')))}</td>"
+                    f"<td class='amount'>{scenario_amount:,.2f}</td>"
+                    f"<td class='accounts-cell'>{account_html}</td>"
+                    "</tr>"
+                )
+            sections.append(
+                f"<details class='company-scenario-section' {'open' if idx == 0 else ''}>"
+                "<summary>"
+                f"<span>公司代码 {html.escape(company_code)}</span>"
+                f"<strong>{company_totals[company_code]:,.2f}</strong>"
+                "</summary>"
+                "<table class='company-scenario-table'>"
+                "<thead><tr><th>审计场景</th><th class='amount'>场景金额</th><th>关联科目 / 科目描述 / 金额</th></tr></thead>"
+                f"<tbody>{''.join(scenario_rows)}</tbody>"
+                "</table>"
+                "</details>"
+            )
+
+        table_html = textwrap.dedent(f"""
+            <style>
+            .company-scenario-preview {{
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+            }}
+            .company-scenario-section {{
+                border: 1px solid #d8dde6;
+                border-radius: 8px;
+                background: #fff;
+                overflow: hidden;
+            }}
+            .company-scenario-section summary {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 16px;
+                cursor: pointer;
+                padding: 12px 14px;
+                background: #f7f9fc;
+                color: #00338d;
+                font-weight: 700;
+            }}
+            .company-scenario-section summary strong {{
+                color: #006b6b;
+                font-weight: 700;
+                white-space: nowrap;
+            }}
+            .company-scenario-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+            }}
+            .company-scenario-table th,
+            .company-scenario-table td {{
+                border-top: 1px solid #e7eaf0;
+                border-right: 1px solid #e7eaf0;
+                padding: 10px 12px;
+                text-align: left;
+                vertical-align: top;
+            }}
+            .company-scenario-table th {{
+                color: #4d5a6a;
+                background: #fbfcfe;
+                font-weight: 600;
+            }}
+            .company-scenario-table th:last-child,
+            .company-scenario-table td:last-child {{
+                border-right: 0;
+            }}
+            .company-scenario-table .scenario-name {{
+                width: 14%;
+                min-width: 110px;
+                color: #1a1a1a;
+                font-weight: 600;
+            }}
+            .company-scenario-table .amount {{
+                width: 12%;
+                min-width: 130px;
+                text-align: right;
+                white-space: nowrap;
+            }}
+            .company-scenario-table .accounts-cell {{
+                white-space: normal;
+                line-height: 1.9;
+            }}
+            .account-detail-chip {{
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                margin: 2px 6px 2px 0;
+                padding: 2px 8px;
+                max-width: 100%;
+                border-radius: 999px;
+                background: #f1f4f9;
+                color: #53627a;
+                flex-wrap: wrap;
+            }}
+            .account-detail-chip .account-code {{
+                color: #00338d;
+                font-weight: 700;
+            }}
+            .account-detail-chip .account-desc {{
+                overflow-wrap: anywhere;
+            }}
+            .account-detail-chip .account-amount {{
+                color: #006b6b;
+                font-weight: 700;
+                white-space: nowrap;
+            }}
+            .empty-cell {{
+                color: #8a94a6;
+            }}
+            </style>
+            <div class="company-scenario-preview">
+                {''.join(sections)}
+            </div>
+            """).strip()
+        st.html(table_html)
+        if total_accounts and matched_accounts == 0:
+            st.warning("当前 T030 场景科目没有在 SKAT 中找到对应名称；请确认上传的是完整 SKAT，或在下一步上传余额表补充科目名称。")
+        return
+
     rows = []
     for _, row in preview_df.iterrows():
         account_chips = "".join(
             f"<span class='account-chip'>{html.escape(str(account))}</span>"
             for account in row.get("accounts", [])
         ) or "<span class='empty-cell'>无关联科目</span>"
-        company_values = row.get("company_values") or []
-        company_chips = "".join(
-            f"<span class='company-chip'>{html.escape(str(item.get('company_code', '未指定公司')))}: {float(item.get('total_value', 0)):,.2f}</span>"
-            for item in company_values
-        ) or "<span class='empty-cell'>无金额明细</span>"
-        amount_cell = (
-            f"<td class='amount'>{float(row.get('total_value', 0)):,.2f}</td>"
-            f"<td class='company-cell'>{company_chips}</td>"
-        ) if show_amount else ""
         rows.append(
             "<tr>"
             f"<td class='scenario-name'>{html.escape(str(row.get('name', '')))}</td>"
-            f"{amount_cell}"
             f"<td class='count-cell'>{int(row.get('已匹配名称', 0))}</td>"
             f"<td class='count-cell'>{int(row.get('未匹配名称', 0))}</td>"
             f"<td class='accounts-cell'>{account_chips}</td>"
@@ -376,12 +518,6 @@ def render_scenario_preview(ranked, show_amount=False):
             white-space: normal;
             line-height: 1.9;
         }}
-        .scenario-preview-table .company-cell {{
-            width: 22%;
-            min-width: 220px;
-            white-space: normal;
-            line-height: 1.9;
-        }}
         .scenario-preview-table .account-chip {{
             display: inline-block;
             margin: 2px 5px 2px 0;
@@ -393,15 +529,6 @@ def render_scenario_preview(ranked, show_amount=False):
             overflow-wrap: anywhere;
             white-space: normal;
         }}
-        .scenario-preview-table .company-chip {{
-            display: inline-block;
-            margin: 2px 5px 2px 0;
-            padding: 2px 8px;
-            border-radius: 999px;
-            background: #e8f5f5;
-            color: #006b6b;
-            white-space: nowrap;
-        }}
         .scenario-preview-table .empty-cell {{
             color: #8a94a6;
         }}
@@ -410,7 +537,6 @@ def render_scenario_preview(ranked, show_amount=False):
             <thead>
                 <tr>
                     <th>审计场景</th>
-                    {amount_header}
                     <th>已匹配名称</th>
                     <th>未匹配名称</th>
                     <th>关联科目</th>

@@ -84,8 +84,21 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
 
     assert purchase_receipt["total_value"] == 580.0
     assert purchase_receipt["company_values"] == [
-        {"company_code": "4000", "total_value": 520.0},
-        {"company_code": "4010", "total_value": 60.0},
+        {
+            "company_code": "4000",
+            "total_value": 520.0,
+            "account_values": [
+                {"account": "1403000000", "description": "原材料", "total_value": 500.0},
+                {"account": "2202040000", "description": "应付账款-GR/IR", "total_value": 20.0},
+            ],
+        },
+        {
+            "company_code": "4010",
+            "total_value": 60.0,
+            "account_values": [
+                {"account": "1403000000", "description": "原材料", "total_value": 60.0},
+            ],
+        },
     ]
 
 if __name__ == "__main__":

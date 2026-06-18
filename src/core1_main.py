@@ -152,9 +152,19 @@ class Core1Orchestrator:
             for company_code, amount_map in tb_amounts_by_company.items():
                 company_total = sum(amount_map.get(acc, 0) for acc in acc_list)
                 if company_total:
+                    account_values = []
+                    for acc in acc_list:
+                        account_total = amount_map.get(acc, 0)
+                        if account_total:
+                            account_values.append({
+                                "account": acc,
+                                "description": acc_descs.get(acc, "未知科目"),
+                                "total_value": account_total
+                            })
                     company_values.append({
                         "company_code": company_code,
-                        "total_value": company_total
+                        "total_value": company_total,
+                        "account_values": account_values
                     })
             company_values.sort(key=lambda x: x["total_value"], reverse=True)
 
