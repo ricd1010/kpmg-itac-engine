@@ -12,6 +12,7 @@ from core1_main import Core1Orchestrator
 from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
 from data_validator import DataValidator
+from scenario_summary import build_scenario_account_totals
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -346,6 +347,35 @@ def render_scenario_preview(ranked, show_amount=False):
             st.info("余额表最后期间未命中任何已关联场景科目，场景金额暂为 0。")
             return
 
+        summary_rows = []
+        for row in build_scenario_account_totals(ranked):
+            extra_note = (
+                f"<span class='summary-extra-note'>{int(row.get('extra_company_count', 0))} 家含额外科目</span>"
+                if int(row.get("extra_company_count", 0) or 0) else ""
+            )
+            company_codes_text = "、".join(str(code) for code in row.get("company_codes", []))
+            summary_rows.append(
+                "<tr>"
+                f"<td class='scenario-name'>{html.escape(str(row.get('scenario', '')))}</td>"
+                f"<td><span class='summary-account-code'>{html.escape(str(row.get('account', '')))}</span></td>"
+                f"<td>{html.escape(str(row.get('description', '未知科目')))}</td>"
+                f"<td class='amount'>{float(row.get('total_value', 0) or 0):,.2f}</td>"
+                f"<td class='summary-company-count' title='{html.escape(company_codes_text)}'>{int(row.get('company_count', 0) or 0)}</td>"
+                f"<td>{extra_note}</td>"
+                "</tr>"
+            )
+        summary_html = ""
+        if summary_rows:
+            summary_html = (
+                "<section class='scenario-total-summary'>"
+                "<div class='summary-title'>场景科目总金额汇总</div>"
+                "<table class='scenario-total-table'>"
+                "<thead><tr><th>审计场景</th><th>科目编码</th><th>科目描述</th><th class='amount'>总金额</th><th>命中公司数</th><th>提示</th></tr></thead>"
+                f"<tbody>{''.join(summary_rows)}</tbody>"
+                "</table>"
+                "</section>"
+            )
+
         sections = []
         for idx, company_code in enumerate(company_codes):
             scenario_rows = []
@@ -407,6 +437,64 @@ def render_scenario_preview(ranked, show_amount=False):
                 border-radius: 8px;
                 background: #fff;
                 overflow: hidden;
+            }}
+            .scenario-total-summary {{
+                border: 1px solid #d8dde6;
+                border-radius: 8px;
+                background: #fff;
+                overflow: hidden;
+            }}
+            .summary-title {{
+                padding: 12px 14px;
+                background: #eef7f7;
+                color: #00338d;
+                font-weight: 800;
+                border-bottom: 1px solid #d8dde6;
+            }}
+            .scenario-total-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+            }}
+            .scenario-total-table th,
+            .scenario-total-table td {{
+                border-bottom: 1px solid #e7eaf0;
+                border-right: 1px solid #e7eaf0;
+                padding: 9px 12px;
+                text-align: left;
+                vertical-align: top;
+            }}
+            .scenario-total-table tr:last-child td {{
+                border-bottom: 0;
+            }}
+            .scenario-total-table th {{
+                color: #4d5a6a;
+                background: #fbfcfe;
+                font-weight: 600;
+            }}
+            .scenario-total-table th:last-child,
+            .scenario-total-table td:last-child {{
+                border-right: 0;
+            }}
+            .summary-account-code {{
+                color: #00338d;
+                font-weight: 800;
+                white-space: nowrap;
+            }}
+            .summary-company-count {{
+                text-align: right;
+                white-space: nowrap;
+            }}
+            .summary-extra-note {{
+                display: inline-block;
+                border-radius: 999px;
+                background: #fff4db;
+                border: 1px solid #f0b64a;
+                color: #8a5200;
+                padding: 1px 8px;
+                font-size: 12px;
+                font-weight: 700;
+                white-space: nowrap;
             }}
             .company-scenario-section summary {{
                 cursor: pointer;
@@ -530,6 +618,7 @@ def render_scenario_preview(ranked, show_amount=False):
             </style>
             <div class="company-scenario-preview">
                 {legend_html}
+                {summary_html}
                 {''.join(sections)}
             </div>
             """).strip()
@@ -686,9 +775,13 @@ if st.session_state.results:
             render_scenario_preview(res["ranked"], show_amount=True)
     with t2:
         st.subheader("TOD/TOE 穿行测试描述")
-        for it in res["di"]:
-            with st.expander(f"📌 {it['scenario']}"):
-                st.info(it["di_description"]); st.write("**样本细节记录 (TOE):**"); st.json(it["sample_table"])
+        di_items = res.get("di", [])
+        if di_items:
+            for it in di_items:
+                with st.expander(f"📌 {it['scenario']}"):
+                    st.info(it["di_description"]); st.write("**样本细节记录 (TOE):**"); st.json(it["sample_table"])
+        else:
+            st.info("未生成 TOD/TOE 描述：当前样本没有命中任何场景关联科目。请检查 OCR 结果或样本清单中的凭证号、科目编码和金额字段。")
     with t3:
         st.subheader("最终成果文件导出")
         with open(res["report_path"], "rb") as f:
@@ -871,6 +964,8 @@ elif st.session_state.current_step == 3:
                     for s in st.session_state.ocr_samples:
                         lines.append({"DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
                     s_df = pd.DataFrame(lines)
+                s_df = Core2Orchestrator.normalize_samples_dataframe(s_df)
+                s_df = s_df[["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE"]]
                 s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding='utf-8-sig')
                 
                 c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
