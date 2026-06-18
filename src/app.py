@@ -22,7 +22,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 3
+SCENARIO_PREVIEW_SCHEMA_VERSION = 4
 
 # Generate custom KPMG Favicon
 fav_svg = f"""
@@ -320,11 +320,26 @@ def render_scenario_preview(ranked, show_amount=False):
     matched_accounts = int(preview_df["已匹配名称"].sum())
 
     if show_amount:
+        def account_chip(account):
+            chip_class = "account-detail-chip account-extra-chip" if account.get("is_extra") else "account-detail-chip"
+            extra_badge = "<span class='extra-badge'>额外</span>" if account.get("is_extra") else ""
+            return (
+                f"<span class='{chip_class}'>"
+                f"<span class='account-code'>{html.escape(str(account.get('account', '')))}</span>"
+                f"<span class='account-desc'>{html.escape(str(account.get('description', '未知科目')))}</span>"
+                f"<span class='account-amount'>{float(account.get('total_value', 0) or 0):,.2f}</span>"
+                f"{extra_badge}"
+                "</span>"
+            )
+
         company_codes = set()
+        has_extra_accounts = False
         for result in ranked:
             for item in result.get("company_values", []):
                 company_code = str(item.get("company_code", "未指定公司"))
                 company_codes.add(company_code)
+                if any(account.get("is_extra") for account in item.get("account_values", [])):
+                    has_extra_accounts = True
         company_codes = sorted(company_codes)
 
         if not company_codes:
@@ -343,18 +358,19 @@ def render_scenario_preview(ranked, show_amount=False):
                 account_values = company_item.get("account_values", []) if company_item else []
                 if account_values:
                     account_html = "".join(
-                        "<span class='account-detail-chip'>"
-                        f"<span class='account-code'>{html.escape(str(account.get('account', '')))}</span>"
-                        f"<span class='account-desc'>{html.escape(str(account.get('description', '未知科目')))}</span>"
-                        f"<span class='account-amount'>{float(account.get('total_value', 0) or 0):,.2f}</span>"
-                        "</span>"
+                        account_chip(account)
                         for account in account_values
                     )
                 else:
                     account_html = "<span class='empty-cell'>该公司最后期间未命中此场景科目</span>"
+                baseline_company_code = result.get("baseline_company_code")
+                baseline_html = (
+                    f"<span class='baseline-pill'>基准公司：{html.escape(str(baseline_company_code))}</span>"
+                    if baseline_company_code else ""
+                )
                 scenario_rows.append(
                     "<tr>"
-                    f"<td class='scenario-name'>{html.escape(str(result.get('name', '')))}</td>"
+                    f"<td class='scenario-name'>{html.escape(str(result.get('name', '')))}{baseline_html}</td>"
                     f"<td class='amount'>{scenario_amount:,.2f}</td>"
                     f"<td class='accounts-cell'>{account_html}</td>"
                     "</tr>"
@@ -370,6 +386,14 @@ def render_scenario_preview(ranked, show_amount=False):
                 "</table>"
                 "</details>"
             )
+
+        legend_html = (
+            "<div class='scenario-baseline-legend'>"
+            "<span class='legend-swatch'></span>"
+            "高亮 = 相比该场景基准公司多出的实际命中科目"
+            "</div>"
+            if has_extra_accounts else ""
+        )
 
         table_html = textwrap.dedent(f"""
             <style>
@@ -419,6 +443,14 @@ def render_scenario_preview(ranked, show_amount=False):
                 color: #1a1a1a;
                 font-weight: 600;
             }}
+            .baseline-pill {{
+                display: block;
+                margin-top: 4px;
+                color: #006b6b;
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1.4;
+            }}
             .company-scenario-table .amount {{
                 width: 12%;
                 min-width: 130px;
@@ -453,11 +485,51 @@ def render_scenario_preview(ranked, show_amount=False):
                 font-weight: 700;
                 white-space: nowrap;
             }}
+            .account-extra-chip {{
+                background: #fff4db;
+                border: 1px solid #f0b64a;
+                color: #694700;
+            }}
+            .account-extra-chip .account-code,
+            .account-extra-chip .account-amount {{
+                color: #8a5200;
+            }}
+            .extra-badge {{
+                border-radius: 999px;
+                background: #d97900;
+                color: #fff;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 0 6px;
+                line-height: 1.5;
+            }}
+            .scenario-baseline-legend {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                width: fit-content;
+                padding: 6px 10px;
+                border-radius: 8px;
+                background: #fff8e8;
+                color: #6b4b00;
+                border: 1px solid #f0d088;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            .legend-swatch {{
+                display: inline-block;
+                width: 14px;
+                height: 14px;
+                border-radius: 999px;
+                background: #fff4db;
+                border: 1px solid #f0b64a;
+            }}
             .empty-cell {{
                 color: #8a94a6;
             }}
             </style>
             <div class="company-scenario-preview">
+                {legend_html}
                 {''.join(sections)}
             </div>
             """).strip()

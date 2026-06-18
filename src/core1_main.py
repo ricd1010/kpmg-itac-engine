@@ -47,6 +47,38 @@ class Core1Orchestrator:
             return "未指定公司"
         return s
 
+    def _apply_baseline_flags(self, company_values):
+        candidates = [item for item in company_values if item.get("account_values")]
+        if not candidates:
+            return None, [], 0
+
+        baseline = min(
+            candidates,
+            key=lambda item: (
+                len(item.get("account_values", [])),
+                float(item.get("total_value", 0) or 0),
+                str(item.get("company_code", ""))
+            )
+        )
+        baseline_company_code = str(baseline.get("company_code", ""))
+        baseline_accounts = {
+            str(account.get("account", ""))
+            for account in baseline.get("account_values", [])
+            if account.get("account")
+        }
+        extra_accounts = set()
+
+        for item in company_values:
+            for account in item.get("account_values", []):
+                account_code = str(account.get("account", ""))
+                is_extra = bool(account_code and account_code not in baseline_accounts)
+                account["is_extra"] = is_extra
+                account["baseline_company_code"] = baseline_company_code
+                if is_extra:
+                    extra_accounts.add(account_code)
+
+        return baseline_company_code, sorted(baseline_accounts), len(extra_accounts)
+
     def run(self):
         # 1. 解析 T030，提取已配置的科目
         # 结果结构：{ scenario_name: set(account_codes) }
@@ -164,13 +196,17 @@ class Core1Orchestrator:
                         "account_values": account_values
                     })
             company_values.sort(key=lambda x: x["total_value"], reverse=True)
+            baseline_company_code, baseline_account_codes, extra_account_count = self._apply_baseline_flags(company_values)
 
             results.append({
                 "name": name,
                 "accounts": display_accounts,
                 "raw_accounts": acc_list,
                 "total_value": sum(tb_amounts.get(acc, 0) for acc in acc_list),
-                "company_values": company_values
+                "company_values": company_values,
+                "baseline_company_code": baseline_company_code,
+                "baseline_account_codes": baseline_account_codes,
+                "extra_account_count": extra_account_count
             })
 
         results.sort(key=lambda x: x['total_value'], reverse=True)

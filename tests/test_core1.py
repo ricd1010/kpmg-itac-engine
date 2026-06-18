@@ -56,6 +56,9 @@ def test_core1_preview_runs_without_trial_balance(tmp_path):
     assert len(results) == 10
     assert all(result["total_value"] == 0 for result in results)
     assert any(result["accounts"] for result in results)
+    assert all(result["baseline_company_code"] is None for result in results)
+    assert all(result["baseline_account_codes"] == [] for result in results)
+    assert all(result["extra_account_count"] == 0 for result in results)
 
 
 def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
@@ -85,26 +88,88 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
     sales_entry = next(result for result in results if result["name"] == "销售入账")
 
     assert purchase_receipt["total_value"] == 37.0
+    assert purchase_receipt["baseline_company_code"] == "4010"
+    assert purchase_receipt["baseline_account_codes"] == ["1403000000"]
+    assert purchase_receipt["extra_account_count"] == 1
     assert purchase_receipt["company_values"] == [
         {
             "company_code": "4000",
             "total_value": 34.0,
             "account_values": [
-                {"account": "1403000000", "description": "原材料", "total_value": 27.0},
-                {"account": "2202040000", "description": "应付账款-GR/IR", "total_value": 7.0},
+                {
+                    "account": "1403000000",
+                    "description": "原材料",
+                    "total_value": 27.0,
+                    "is_extra": False,
+                    "baseline_company_code": "4010",
+                },
+                {
+                    "account": "2202040000",
+                    "description": "应付账款-GR/IR",
+                    "total_value": 7.0,
+                    "is_extra": True,
+                    "baseline_company_code": "4010",
+                },
             ],
         },
         {
             "company_code": "4010",
             "total_value": 3.0,
             "account_values": [
-                {"account": "1403000000", "description": "原材料", "total_value": 3.0},
+                {
+                    "account": "1403000000",
+                    "description": "原材料",
+                    "total_value": 3.0,
+                    "is_extra": False,
+                    "baseline_company_code": "4010",
+                },
             ],
         },
     ]
     assert sales_entry["raw_accounts"] == []
     assert sales_entry["total_value"] == 0
     assert sales_entry["company_values"] == []
+    assert sales_entry["baseline_company_code"] is None
+    assert sales_entry["baseline_account_codes"] == []
+    assert sales_entry["extra_account_count"] == 0
+
+
+def test_core1_baseline_tie_breaks_by_amount_then_company_code(tmp_path):
+    (tmp_path / "T030.csv").write_text(
+        "KTOSL,KOMOK,KONTS,KONTH\nBSX,,1403000000,2202040000\n",
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "SKAT.csv").write_text(
+        "SAKNR,TXT50\n1403000000,原材料\n2202040000,应付账款-GR/IR\n",
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "TrialBalance.csv").write_text(
+        "\n".join([
+            "COMPANY_CODE,PERIOD,SAKNR,TXT50,DMBTR_DEBIT",
+            "4000,202502,1403000000,原材料,20",
+            "4010,202502,1403000000,原材料,10",
+            "4020,202502,1403000000,原材料,10",
+            "4030,202502,1403000000,原材料,10",
+            "4030,202502,2202040000,应付账款-GR/IR,1",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    results = Core1Orchestrator(tmp_path).run()
+    purchase_receipt = next(result for result in results if result["name"] == "采购收货")
+    company_4030 = next(item for item in purchase_receipt["company_values"] if item["company_code"] == "4030")
+    extra_4030 = [account for account in company_4030["account_values"] if account["is_extra"]]
+
+    assert purchase_receipt["baseline_company_code"] == "4010"
+    assert purchase_receipt["baseline_account_codes"] == ["1403000000"]
+    assert purchase_receipt["extra_account_count"] == 1
+    assert extra_4030 == [{
+        "account": "2202040000",
+        "description": "应付账款-GR/IR",
+        "total_value": 1.0,
+        "is_extra": True,
+        "baseline_company_code": "4010",
+    }]
 
 if __name__ == "__main__":
     import pytest
