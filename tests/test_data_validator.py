@@ -56,6 +56,19 @@ def test_wide_samples_csv_is_accepted():
     assert df.iloc[0]["AMOUNT"] == -13.21
 
 
+def test_inf_sample_excel_maps_purchase_document_as_doc_num():
+    ok, msg, df = DataValidator.validate_file(
+        MockUpload(REPO_ROOT / "data" / "xinxiwang" / "inf 1.XLSX"),
+        "Samples",
+    )
+
+    assert ok, msg
+    assert {"DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "KTOSL"}.issubset(df.columns)
+    assert df.iloc[0]["DOC_NUM"] == "8174291462"
+    assert df.iloc[0]["SAKNR"] == "1405010000"
+    assert df.iloc[0]["AMOUNT"] == -13.21
+
+
 def test_t030_keeps_account_modifier_separate_from_account_code():
     ok, msg, df = DataValidator.validate_file(
         MockUpload(REPO_ROOT / "data" / "xinxiwang" / "T030 HEBING.xlsx"),

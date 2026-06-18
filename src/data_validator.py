@@ -91,6 +91,8 @@ class DataValidator:
                         for p in pos:
                             if p != "KONTS": df = df.rename(columns={p: "KONTH"}); break
                     if "KONTH" not in df.columns and "KONTS" in df.columns: df["KONTH"] = df["KONTS"]
+            elif file_type == "Samples":
+                df = DataValidator._fill_sample_doc_num(df)
 
             required = DataValidator.REQUIRED_COLUMNS.get(file_type, [])
             missing = [col for col in required if col not in df.columns]
@@ -203,13 +205,36 @@ class DataValidator:
         return df.rename(columns=new_map)
 
     @staticmethod
+    def _fill_sample_doc_num(df):
+        doc_sources = ["采购凭证", "开票凭证", "订单", "记账代码", "记帐代码"]
+        df = df.copy()
+
+        def missing_mask(series):
+            as_text = series.astype(str).str.strip().str.lower()
+            return series.isna() | as_text.isin({"", "nan", "none", "null"})
+
+        if "DOC_NUM" not in df.columns:
+            for col in doc_sources:
+                if col in df.columns:
+                    df["DOC_NUM"] = df[col]
+                    break
+            return df
+
+        for col in doc_sources:
+            if col in df.columns:
+                mask = missing_mask(df["DOC_NUM"])
+                if mask.any():
+                    df.loc[mask, "DOC_NUM"] = df.loc[mask, col]
+        return df
+
+    @staticmethod
     def _map_columns(df, file_type):
         common_mapping = {
             "SAKNR": ["saknr", "总账科目", "总帐科目", "G/L Account", "科目"],
             "TXT50": ["txt50", "科目描述", "科目名称", "短文本", "总分类帐名称"],
             "DMBTR_DEBIT": ["dmbtr_debit", "借方金额", "在制表期间的借方余额", "已结转余额", "借方", "前一期间的余额"],
             "DMBTR_CREDIT": ["dmbtr_credit", "贷方金额", "报表期间的贷方余额", "累计余额", "贷方"],
-            "DOC_NUM": ["doc_num", "凭证号", "会计凭证"],
+            "DOC_NUM": ["doc_num", "凭证号", "会计凭证", "采购凭证", "开票凭证", "订单", "记账代码", "记帐代码"],
             "DATE": ["date", "日期", "过账日期"],
             "AMOUNT": ["amount", "金额", "交易金额"],
             "SHKZG": ["shkzg", "借/贷标识", "S/H"],
