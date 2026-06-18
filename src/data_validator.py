@@ -9,7 +9,7 @@ class DataValidator:
     REQUIRED_COLUMNS = {
         "SKAT": ["SAKNR", "TXT50"],
         "T030": ["KONTS", "KONTH"], 
-        "TrialBalance": ["SAKNR", "DMBTR_DEBIT", "DMBTR_CREDIT"],
+        "TrialBalance": ["SAKNR", "DMBTR_DEBIT"],
         "Samples": ["DOC_NUM", "SAKNR", "AMOUNT"]
     }
 
@@ -25,7 +25,7 @@ class DataValidator:
             # --- 阶段 1：Excel ---
             for eng in ['openpyxl', 'xlrd']:
                 try:
-                    df_raw = pd.read_excel(io.BytesIO(raw_content), header=None, engine=eng)
+                    df_raw = pd.read_excel(io.BytesIO(raw_content), sheet_name=0, header=None, engine=eng)
                     df = DataValidator._find_real_header(df_raw, file_type)
                     if df is not None: break
                 except Exception:
@@ -136,7 +136,7 @@ class DataValidator:
             "dmbtr": 15, "借方余额": 15, "贷方余额": 15, "借方金额": 15, "贷方金额": 15,
             "评估分组代码": 15, "科目修改": 15, "trs": 15, "valcl": 15,
             "已结转余额": 15, "前一期间的余额": 15, "在制表期间的借方余额": 15,
-            "本年借方累计": 15, "本年贷方累计": 15, "会计期间": 15, "公司代码": 15,
+            "本月借方发生额": 15, "本年借方累计": 15, "本年贷方累计": 15, "会计期间": 15, "公司代码": 15,
             "txt50": 10, "短文本": 10, "科目名称": 10, "科目描述": 10, "科目编码": 10, "帐目表": 10
         }
         # 严禁词：只针对纯粹的 metadata 标题
@@ -195,7 +195,7 @@ class DataValidator:
             col_data = df.iloc[:, i].astype(str).head(100)
             if not has_col("SAKNR") and col_data.str.match(r'^\d{8,10}$').sum() > 20:
                 new_map[df.columns[i]] = "SAKNR"
-            elif not has_col("DMBTR_CREDIT") and col_data.str.contains(r'\.').sum() > 20:
+            elif (not has_col("DMBTR_DEBIT") or not has_col("DMBTR_CREDIT")) and col_data.str.contains(r'\.').sum() > 20:
                 nums = pd.to_numeric(col_data.str.replace(',', ''), errors='coerce')
                 if nums.notna().sum() > 30:
                     if not has_col("DMBTR_DEBIT"): new_map[df.columns[i]] = "DMBTR_DEBIT"
@@ -230,12 +230,12 @@ class DataValidator:
                 "SAKNR": ["saknr", "科目编码", "科目代码", "总账科目", "总帐科目", "G/L Account", "科目"],
                 "TXT50": ["txt50", "科目名称", "科目描述", "短文本", "总分类帐名称"],
                 "DMBTR_DEBIT": [
-                    "dmbtr_debit", "本年借方累计", "借方累计", "累计借方",
-                    "本月借方发生额", "借方发生额", "借方金额", "在制表期间的借方余额"
+                    "dmbtr_debit", "本月借方发生额", "借方发生额", "借方金额",
+                    "本年借方累计", "借方累计", "累计借方", "在制表期间的借方余额"
                 ],
                 "DMBTR_CREDIT": [
-                    "dmbtr_credit", "本年贷方累计", "贷方累计", "累计贷方",
-                    "本月贷方发生额", "贷方发生额", "贷方金额", "报表期间的贷方余额"
+                    "dmbtr_credit", "本月贷方发生额", "贷方发生额", "贷方金额",
+                    "本年贷方累计", "贷方累计", "累计贷方", "报表期间的贷方余额"
                 ],
             }
         else:

@@ -36,7 +36,7 @@ class Core1Orchestrator:
         if not cleaned or cleaned.lower() in {"nan", "none", "null"}:
             return 0.0
         try:
-            return abs(float(cleaned))
+            return float(cleaned)
         except ValueError:
             return 0.0
 
@@ -90,7 +90,7 @@ class Core1Orchestrator:
                         if k: acc_descs[k] = str(row[t_col]).strip()
             except: pass
 
-        # 3. 如果提供科目余额表，按公司代码取各自最后期间，汇总本年累计发生额；同时用余额表 TXT50 补足 SKAT 缺失描述
+        # 3. 如果提供科目余额表，按公司代码取各自最后期间，汇总本月借方发生额；同时用余额表 TXT50 补足 SKAT 缺失描述
         tb_amounts = {}
         tb_amounts_by_company = {}
         if os.path.exists(self.tb_path):
@@ -99,7 +99,6 @@ class Core1Orchestrator:
                 df_tb.columns = [str(c).strip().upper() for c in df_tb.columns]
                 
                 d_col = 'DMBTR_DEBIT' if 'DMBTR_DEBIT' in df_tb.columns else next((c for c in df_tb.columns if 'DEBIT' in c or '借方' in c), None)
-                c_col = 'DMBTR_CREDIT' if 'DMBTR_CREDIT' in df_tb.columns else next((c for c in df_tb.columns if 'CREDIT' in c or '贷方' in c), None)
                 s_col = 'SAKNR' if 'SAKNR' in df_tb.columns else next((c for c in df_tb.columns if '科目' in c), None)
                 t_col = 'TXT50' if 'TXT50' in df_tb.columns else next((c for c in df_tb.columns if '描述' in c or '名称' in c), None)
                 company_col = next((c for c in df_tb.columns if c == 'COMPANY_CODE' or '公司代码' in c or 'BUKRS' in c), None)
@@ -133,9 +132,7 @@ class Core1Orchestrator:
                         saknr = self._clean_acc(row[s_col])
                         if not saknr: continue
                         
-                        val = 0.0
-                        if d_col: val += self._parse_amt(row[d_col])
-                        if c_col: val += self._parse_amt(row[c_col])
+                        val = self._parse_amt(row[d_col]) if d_col else 0.0
                         tb_amounts[saknr] = tb_amounts.get(saknr, 0) + val
                         company_code = self._company_label(row[company_col]) if company_col else "未指定公司"
                         tb_amounts_by_company.setdefault(company_code, {})

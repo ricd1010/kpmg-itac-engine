@@ -297,12 +297,16 @@ def render_scenario_preview(ranked, show_amount=False):
     matched_accounts = int(preview_df["已匹配名称"].sum())
 
     if show_amount:
-        company_totals = {}
+        company_codes = set()
         for result in ranked:
             for item in result.get("company_values", []):
                 company_code = str(item.get("company_code", "未指定公司"))
-                company_totals[company_code] = company_totals.get(company_code, 0.0) + float(item.get("total_value", 0) or 0)
-        company_codes = sorted(company_totals, key=lambda code: company_totals[code], reverse=True)
+                company_codes.add(company_code)
+        company_codes = sorted(company_codes)
+
+        if not company_codes:
+            st.info("余额表最后期间未命中任何已关联场景科目，场景金额暂为 0。")
+            return
 
         sections = []
         for idx, company_code in enumerate(company_codes):
@@ -336,7 +340,6 @@ def render_scenario_preview(ranked, show_amount=False):
                 f"<details class='company-scenario-section' {'open' if idx == 0 else ''}>"
                 "<summary>"
                 f"<span>公司代码 {html.escape(company_code)}</span>"
-                f"<strong>{company_totals[company_code]:,.2f}</strong>"
                 "</summary>"
                 "<table class='company-scenario-table'>"
                 "<thead><tr><th>审计场景</th><th class='amount'>场景金额</th><th>关联科目 / 科目描述 / 金额</th></tr></thead>"
@@ -359,20 +362,11 @@ def render_scenario_preview(ranked, show_amount=False):
                 overflow: hidden;
             }}
             .company-scenario-section summary {{
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                gap: 16px;
                 cursor: pointer;
                 padding: 12px 14px;
                 background: #f7f9fc;
                 color: #00338d;
                 font-weight: 700;
-            }}
-            .company-scenario-section summary strong {{
-                color: #006b6b;
-                font-weight: 700;
-                white-space: nowrap;
             }}
             .company-scenario-table {{
                 width: 100%;
