@@ -22,6 +22,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
+SCENARIO_PREVIEW_SCHEMA_VERSION = 3
 
 # Generate custom KPMG Favicon
 fav_svg = f"""
@@ -243,6 +244,7 @@ if "base_file_signature" not in st.session_state: st.session_state.base_file_sig
 if "trial_balance_ready" not in st.session_state: st.session_state.trial_balance_ready = False
 if "trial_balance_signature" not in st.session_state: st.session_state.trial_balance_signature = None
 if "scenario_preview" not in st.session_state: st.session_state.scenario_preview = []
+if "scenario_preview_schema_version" not in st.session_state: st.session_state.scenario_preview_schema_version = None
 
 # Background API Validation
 if not st.session_state.api_check_done:
@@ -279,7 +281,28 @@ def validate_upload_to_session(uploaded_file, file_type):
 def refresh_scenario_preview():
     ranked = Core1Orchestrator(SESSION_DATA_DIR).run()
     st.session_state.scenario_preview = ranked
+    st.session_state.scenario_preview_schema_version = SCENARIO_PREVIEW_SCHEMA_VERSION
     return ranked
+
+def scenario_preview_needs_refresh():
+    if not st.session_state.base_files_ready:
+        return False
+    if not os.path.exists(os.path.join(SESSION_DATA_DIR, "T030.csv")):
+        return False
+    if not os.path.exists(os.path.join(SESSION_DATA_DIR, "SKAT.csv")):
+        return False
+    if st.session_state.scenario_preview_schema_version != SCENARIO_PREVIEW_SCHEMA_VERSION:
+        return True
+    if st.session_state.trial_balance_ready:
+        for result in st.session_state.scenario_preview:
+            for item in result.get("company_values", []):
+                if float(item.get("total_value", 0) or 0) and "account_values" not in item:
+                    return True
+    return False
+
+def ensure_scenario_preview_current():
+    if scenario_preview_needs_refresh():
+        refresh_scenario_preview()
 
 def render_scenario_preview(ranked, show_amount=False):
     if not ranked:
@@ -611,6 +634,7 @@ if st.session_state.results:
             st.session_state.trial_balance_ready = False
             st.session_state.trial_balance_signature = None
             st.session_state.scenario_preview = []
+            st.session_state.scenario_preview_schema_version = None
             st.rerun()
         st.write("---"); st.caption("© 2026 KPMG. All rights reserved. | IT Audit Technology & Innovation")
     st.stop()
@@ -675,6 +699,7 @@ elif st.session_state.current_step == 2:
         st.info("请先上传 T030 配置表和 SKAT 科目表。")
 
     if st.session_state.base_files_ready:
+        ensure_scenario_preview_current()
         st.write("**场景科目匹配预览**")
         render_scenario_preview(st.session_state.scenario_preview, show_amount=False)
         if any("未知科目" in str(acc) for row in st.session_state.scenario_preview for acc in row.get("accounts", [])):
@@ -715,6 +740,7 @@ elif st.session_state.current_step == 3:
     else:
         st.info("可以先跳过余额表，直接上传样本或凭证截图生成底稿；金额列将在上传余额表后显示。")
 
+    ensure_scenario_preview_current()
     with st.expander("查看当前场景匹配结果", expanded=not st.session_state.trial_balance_ready):
         render_scenario_preview(st.session_state.scenario_preview, show_amount=st.session_state.trial_balance_ready)
 
