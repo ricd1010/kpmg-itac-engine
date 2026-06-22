@@ -14,6 +14,7 @@ from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
 from data_validator import DataValidator
 from scenario_summary import build_scenario_account_totals
+from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -992,10 +993,12 @@ elif st.session_state.current_step == 3:
                             llm_c = LLMClient(api_key=effective_key, model_name=selected_model)
                         res = st.session_state.ocr_engine_inst.process_and_parse(img_bytes, llm_client=llm_c)
                         if "items" in res:
+                            account_descriptions = load_account_description_map(SESSION_DATA_DIR)
                             for it in res["items"]:
                                 if it.get("DOC_NUM") and str(it.get("DOC_NUM")).lower() != "null":
                                     item_id = f"{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
                                     if item_id not in [f"{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
+                                        it = enrich_samples_with_account_descriptions([it], account_descriptions)[0]
                                         st.session_state.ocr_samples.append(it)
                             st.session_state.processed_image_names.add(img.name)
                         status.update(label=f"✅ {img.name} 完成", state="complete")
@@ -1004,7 +1007,28 @@ elif st.session_state.current_step == 3:
                 st.rerun() # Refresh to enable button
     if st.session_state.ocr_samples:
         st.write("**📋 已录入样本预览**")
-        st.dataframe(pd.DataFrame(st.session_state.ocr_samples), width="stretch")
+        ocr_df = pd.DataFrame(st.session_state.ocr_samples)
+        preferred_columns = ["DOC_NUM", "DATE", "SAKNR", "TXT50", "AMOUNT", "SHKZG"]
+        for col in preferred_columns:
+            if col not in ocr_df.columns:
+                ocr_df[col] = ""
+        remaining_columns = [col for col in ocr_df.columns if col not in preferred_columns]
+        ocr_df = ocr_df[preferred_columns + remaining_columns]
+        edited_ocr_df = st.data_editor(
+            ocr_df,
+            width="stretch",
+            num_rows="dynamic",
+            key=f"ocr_samples_editor_{len(st.session_state.ocr_samples)}",
+            column_config={
+                "DOC_NUM": st.column_config.TextColumn("DOC_NUM", required=True),
+                "DATE": st.column_config.TextColumn("DATE"),
+                "SAKNR": st.column_config.TextColumn("SAKNR", required=True),
+                "TXT50": st.column_config.TextColumn("TXT50"),
+                "AMOUNT": st.column_config.TextColumn("AMOUNT", required=True),
+                "SHKZG": st.column_config.TextColumn("SHKZG"),
+            },
+        )
+        st.session_state.ocr_samples = edited_ocr_df.fillna("").to_dict("records")
     st.write("---")
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
