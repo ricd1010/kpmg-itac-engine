@@ -260,8 +260,20 @@ def render_scroll_to_top():
     st.session_state.scroll_to_top = False
     components.html(
         """
+        <input
+            id="scroll-focus-target"
+            aria-hidden="true"
+            autofocus
+            style="width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;"
+        />
         <script>
+        const focusTarget = document.getElementById("scroll-focus-target");
         const scrollTop = () => {
+            try {
+                window.focus();
+                focusTarget.focus({ preventScroll: false });
+                focusTarget.scrollIntoView({ block: "start", inline: "nearest" });
+            } catch (err) {}
             try {
                 window.parent.scrollTo({ top: 0, left: 0, behavior: "auto" });
                 const doc = window.parent.document;
@@ -270,6 +282,8 @@ def render_scroll_to_top():
                     doc.documentElement,
                     doc.body,
                     doc.querySelector('[data-testid="stAppViewContainer"]'),
+                    doc.querySelector('[data-testid="stAppViewBlockContainer"]'),
+                    doc.querySelector('section.main'),
                     doc.querySelector('.main')
                 ];
                 targets.forEach((target) => {
@@ -282,11 +296,11 @@ def render_scroll_to_top():
         };
         scrollTop();
         window.requestAnimationFrame(scrollTop);
-        [50, 150, 300, 600].forEach((delay) => window.setTimeout(scrollTop, delay));
+        [50, 150, 300, 600, 1000, 1500, 2500].forEach((delay) => window.setTimeout(scrollTop, delay));
         </script>
         """,
-        height=0,
-        width=0,
+        height=1,
+        width=1,
     )
 
 render_scroll_to_top()
