@@ -8,6 +8,7 @@ import time
 import uuid
 import html
 import textwrap
+import streamlit.components.v1 as components
 from core1_main import Core1Orchestrator
 from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
@@ -246,6 +247,49 @@ if "trial_balance_ready" not in st.session_state: st.session_state.trial_balance
 if "trial_balance_signature" not in st.session_state: st.session_state.trial_balance_signature = None
 if "scenario_preview" not in st.session_state: st.session_state.scenario_preview = []
 if "scenario_preview_schema_version" not in st.session_state: st.session_state.scenario_preview_schema_version = None
+if "scroll_to_top" not in st.session_state: st.session_state.scroll_to_top = False
+
+def go_to_step(step):
+    st.session_state.current_step = step
+    st.session_state.scroll_to_top = True
+    st.rerun()
+
+def render_scroll_to_top():
+    if not st.session_state.get("scroll_to_top"):
+        return
+    st.session_state.scroll_to_top = False
+    components.html(
+        """
+        <script>
+        const scrollTop = () => {
+            try {
+                window.parent.scrollTo({ top: 0, left: 0, behavior: "auto" });
+                const doc = window.parent.document;
+                const targets = [
+                    doc.scrollingElement,
+                    doc.documentElement,
+                    doc.body,
+                    doc.querySelector('[data-testid="stAppViewContainer"]'),
+                    doc.querySelector('.main')
+                ];
+                targets.forEach((target) => {
+                    if (target) {
+                        target.scrollTop = 0;
+                        target.scrollLeft = 0;
+                    }
+                });
+            } catch (err) {}
+        };
+        scrollTop();
+        window.requestAnimationFrame(scrollTop);
+        [50, 150, 300, 600].forEach((delay) => window.setTimeout(scrollTop, delay));
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+render_scroll_to_top()
 
 # Background API Validation
 if not st.session_state.api_check_done:
@@ -826,7 +870,7 @@ if st.session_state.current_step == 1:
             if st.form_submit_button("下一步：上传清单", width="stretch"):
                 if entity_name and system_name:
                     st.session_state.audit_context = {"entity_name": entity_name, "system_name": system_name, "period_start": str(period_start), "period_end": str(period_end)}
-                    st.session_state.current_step = 2; st.rerun()
+                    go_to_step(2)
                 else: st.error("❗ 请完整填写背景信息。")
 
 # --- STEP 2 ---
@@ -873,17 +917,17 @@ elif st.session_state.current_step == 2:
     st.write("---")
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
-        if st.button("返回上一步", width="stretch"): st.session_state.current_step = 1; st.rerun()
+        if st.button("返回上一步", width="stretch"): go_to_step(1)
     with nav_cols[2]:
         if st.button("确认场景匹配并下一步", width="stretch", disabled=not st.session_state.base_files_ready):
-            st.session_state.current_step = 3; st.rerun()
+            go_to_step(3)
 
 # --- STEP 3 ---
 elif st.session_state.current_step == 3:
     if not st.session_state.base_files_ready:
         st.warning("请先完成 T030/SKAT 场景匹配预览。")
         if st.button("返回上传配置表", width="stretch"):
-            st.session_state.current_step = 2; st.rerun()
+            go_to_step(2)
         st.stop()
 
     st.subheader("步骤 3: 补充余额表并采集审计样本证据")
@@ -950,7 +994,7 @@ elif st.session_state.current_step == 3:
     st.write("---")
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
-        if st.button("返回上一步", width="stretch"): st.session_state.current_step = 2; st.rerun()
+        if st.button("返回上一步", width="stretch"): go_to_step(2)
     with nav_cols[2]:
         # Only enable button if ocr is not busy AND we have either a file or OCR samples
         btn_disabled = st.session_state.ocr_busy or (not samples_file and not st.session_state.ocr_samples)
