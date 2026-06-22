@@ -15,6 +15,7 @@ class PromptBuilder:
 二、执行有效性测试 (TOE)
 - 结合具体样本要素进行描述。
 - 必须包含：凭证号 {doc_num}、日期 {date}、借记 {debit_desc} ({debit_acc})、贷记 {credit_desc} ({credit_acc})、金额 {amount}。
+- 如样本包含多条借方或贷方分录，应完整列示每一条科目、科目描述及金额，并说明借贷合计配平。
 - 描述核对过程：核对系统自动生成的会计凭证记录与预设逻辑一致。
 
 
@@ -26,13 +27,35 @@ class PromptBuilder:
 - 系统名称: {system_name}
 - 审计场景: {scenario_name}
 - 预期逻辑: {expected_logic}
+- 借方明细: {debit_detail}
+- 贷方明细: {credit_detail}
 
 ### 撰写规范
 - 语言应高度专业，避免口语化。
 - 只输出上述三个部分的文字内容，不要任何前言或后记。
 """
 
+    def _format_line_details(self, lines, fallback_desc, fallback_acc, amount):
+        if not lines:
+            return f"{fallback_desc} ({fallback_acc}) 金额 {amount}"
+        return "；".join(
+            f"{item.get('description', '未定义科目')} ({item.get('account', '')}) 金额 {float(item.get('amount', 0) or 0):,.2f}"
+            for item in lines
+        )
+
     def build_prompt(self, scenario_name, expected_logic, sample_row, context):
+        debit_detail = self._format_line_details(
+            sample_row.get('DEBIT_LINES', []),
+            sample_row['DEBIT_DESC'],
+            sample_row['DEBIT_ACC'],
+            sample_row['AMOUNT']
+        )
+        credit_detail = self._format_line_details(
+            sample_row.get('CREDIT_LINES', []),
+            sample_row['CREDIT_DESC'],
+            sample_row['CREDIT_ACC'],
+            sample_row['AMOUNT']
+        )
         return self.template.format(
             entity_name=context.get('entity_name', '未指定'),
             system_name=context.get('system_name', '未指定'),
@@ -44,5 +67,7 @@ class PromptBuilder:
             debit_desc=sample_row['DEBIT_DESC'],
             credit_acc=sample_row['CREDIT_ACC'],
             credit_desc=sample_row['CREDIT_DESC'],
-            amount=sample_row['AMOUNT']
+            amount=sample_row['AMOUNT'],
+            debit_detail=debit_detail,
+            credit_detail=credit_detail
         )

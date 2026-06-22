@@ -103,6 +103,61 @@ def test_core2_keeps_balanced_pair_logic(tmp_path):
     assert "OCR_FALLBACK" not in sample
 
 
+def test_core2_balances_multi_line_sap_voucher_with_trailing_credit_minus(tmp_path):
+    write_samples(tmp_path, [
+        {
+            "DOC_NUM": "6000004976",
+            "SAKNR": "1405020000",
+            "TXT50": "库存商品-自制成品",
+            "AMOUNT": "528.470,34",
+            "SHKZG": "",
+            "DATE": "2025-07-28",
+        },
+        {
+            "DOC_NUM": "6000004976",
+            "SAKNR": "1405050100",
+            "TXT50": "库存商品-自制成品差异-采购差异",
+            "AMOUNT": "70.000,26",
+            "SHKZG": "",
+            "DATE": "2025-07-28",
+        },
+        {
+            "DOC_NUM": "6000004976",
+            "SAKNR": "2202040000",
+            "TXT50": "应付账款-GR/IR",
+            "AMOUNT": "598.470,60-",
+            "SHKZG": "",
+            "DATE": "2025-07-28",
+        },
+    ])
+    orchestrator = Core2Orchestrator(tmp_path)
+    orchestrator.llm_client = FakeLLM()
+
+    results = orchestrator.generate_di_descriptions([{
+        "name": "采购收货",
+        "accounts": [
+            "1405020000 (库存商品-自制成品)",
+            "1405050100 (库存商品-自制成品差异-采购差异)",
+            "2202040000 (应付账款-GR/IR)",
+        ],
+    }])
+
+    assert len(results) == 1
+    sample = results[0]["sample_table"]
+    assert sample["BALANCED_MATCH"] is True
+    assert "OCR_FALLBACK" not in sample
+    assert sample["DEBIT_ACC"] == "1405020000; 1405050100"
+    assert sample["CREDIT_ACC"] == "2202040000"
+    assert sample["AMOUNT"] == 598470.6
+    assert sample["DEBIT_LINES"] == [
+        {"account": "1405020000", "description": "库存商品-自制成品", "amount": 528470.34},
+        {"account": "1405050100", "description": "库存商品-自制成品差异-采购差异", "amount": 70000.26},
+    ]
+    assert sample["CREDIT_LINES"] == [
+        {"account": "2202040000", "description": "应付账款-GR/IR", "amount": 598470.6},
+    ]
+
+
 def test_normalize_samples_dataframe_removes_blank_docs_and_infers_direction():
     df = pd.DataFrame([
         {"DOC_NUM": "  ", "SAKNR": "1403000000", "AMOUNT": "1", "SHKZG": ""},
@@ -117,3 +172,11 @@ def test_normalize_samples_dataframe_removes_blank_docs_and_infers_direction():
     assert row["SAKNR_CLEAN"] == "1403000000"
     assert row["SHKZG"] == "H"
     assert row["AMT_VAL"] == 9.0
+
+
+def test_parse_signed_amount_supports_sap_formats():
+    assert Core2Orchestrator._parse_signed_amount("528,470.34") == 528470.34
+    assert Core2Orchestrator._parse_signed_amount("528.470,34") == 528470.34
+    assert Core2Orchestrator._parse_signed_amount("598,470.60-") == -598470.6
+    assert Core2Orchestrator._parse_signed_amount("598.470,60-") == -598470.6
+    assert Core2Orchestrator._parse_signed_amount("(598,470.60)") == -598470.6

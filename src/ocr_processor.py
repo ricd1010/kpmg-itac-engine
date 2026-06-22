@@ -65,7 +65,18 @@ class OCRProcessor:
 {text}
 ---
 ### 目标：
-识别所有会计分录行项目。必须提取：DOC_NUM (凭证号), SAKNR (科目), TXT50 (名称), AMOUNT (数值), SHKZG (S/H), DATE (YYYY-MM-DD)。
+识别凭证表格中的所有会计分录行项目，不要只提取目标科目行。必须提取：
+- DOC_NUM (凭证号)
+- SAKNR (科目)
+- TXT50 (名称/总分类账名称)
+- AMOUNT (金额，保留原始正负号和千分位格式)
+- SHKZG (借贷方向：借方填 S，贷方填 H)
+- DATE (YYYY-MM-DD)
+
+### SAP 金额与方向规则：
+- 金额尾部带 "-" 表示贷方，例如 598.470,60- 应解析为 AMOUNT: "598.470,60-", SHKZG: "H"。
+- 金额为正数且无尾随 "-" 通常表示借方，SHKZG 填 "S"。
+- 同一凭证可能是一借多贷、多借一贷或多借多贷，必须逐行输出。
 
 ### 格式要求：
 直接返回一个 JSON 数组，例如：
@@ -138,12 +149,7 @@ class OCRProcessor:
                     if target == "DATE" and val:
                         val = str(val).replace('.', '-').replace('/', '-')
                     if target == "AMOUNT" and val:
-                        try:
-                            # 清洗金额中的逗号
-                            if isinstance(val, str):
-                                val = val.replace(',', '')
-                            val = float(val)
-                        except: pass
+                        val = str(val).strip().replace('−', '-')
                     node[target] = val
                 normalized.append(node)
                 

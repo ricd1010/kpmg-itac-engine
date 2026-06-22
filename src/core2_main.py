@@ -40,9 +40,39 @@ class Core2Orchestrator:
         text = cls._clean_text(val)
         if not text:
             return 0.0
-        negative = text.startswith("(") and text.endswith(")")
-        cleaned = text.replace(",", "").replace("￥", "").replace("¥", "")
-        cleaned = cleaned.strip("() ")
+        cleaned = (
+            text.replace("￥", "")
+            .replace("¥", "")
+            .replace("CNY", "")
+            .replace("RMB", "")
+            .replace(" ", "")
+            .strip()
+        )
+        negative = (
+            cleaned.startswith("-") or
+            cleaned.endswith("-") or
+            (cleaned.startswith("(") and cleaned.endswith(")"))
+        )
+        cleaned = cleaned.strip("()-")
+        comma_pos = cleaned.rfind(",")
+        dot_pos = cleaned.rfind(".")
+        if comma_pos != -1 and dot_pos != -1:
+            if comma_pos > dot_pos:
+                cleaned = cleaned.replace(".", "").replace(",", ".")
+            else:
+                cleaned = cleaned.replace(",", "")
+        elif comma_pos != -1:
+            decimal_digits = len(cleaned) - comma_pos - 1
+            if decimal_digits == 2:
+                cleaned = cleaned.replace(".", "").replace(",", ".")
+            else:
+                cleaned = cleaned.replace(",", "")
+        elif cleaned.count(".") > 1:
+            parts = cleaned.split(".")
+            if len(parts[-1]) == 2:
+                cleaned = "".join(parts[:-1]) + "." + parts[-1]
+            else:
+                cleaned = "".join(parts)
         try:
             amount = float(cleaned)
         except ValueError:
@@ -178,10 +208,57 @@ class Core2Orchestrator:
                             "AMOUNT": amt
                         })
             if not synthesized:
+                balanced_sample = self._synthesize_balanced_document_sample(doc_num, debit_rows, credit_rows, target_account_codes)
+                if balanced_sample:
+                    synthesized.append(balanced_sample)
+            if not synthesized:
                 synthesized.extend(self._synthesize_single_line_samples(doc_num, group, target_account_codes))
         except Exception:
             synthesized.extend(self._synthesize_single_line_samples(doc_num, group, target_account_codes))
         return synthesized
+
+    def _line_item(self, row):
+        return {
+            "account": row.get("SAKNR", ""),
+            "description": row.get("TXT50", "未定义科目"),
+            "amount": abs(float(row.get("AMT_VAL", 0) or 0)),
+        }
+
+    def _format_lines(self, lines, field):
+        return "; ".join(str(line.get(field, "")) for line in lines if line.get(field))
+
+    def _synthesize_balanced_document_sample(self, doc_num, debit_rows, credit_rows, target_account_codes):
+        if debit_rows.empty or credit_rows.empty:
+            return None
+
+        debit_total = float(debit_rows["AMT_VAL"].sum())
+        credit_total = float(credit_rows["AMT_VAL"].sum())
+        if abs(debit_total - credit_total) > 0.01:
+            return None
+
+        debit_lines = [self._line_item(row) for _, row in debit_rows.iterrows()]
+        credit_lines = [self._line_item(row) for _, row in credit_rows.iterrows()]
+        matched_accounts = {
+            self._clean_acc(line["account"])
+            for line in debit_lines + credit_lines
+            if self._clean_acc(line["account"]) in target_account_codes
+        }
+        if not matched_accounts:
+            return None
+
+        return {
+            "DOC_NUM": doc_num,
+            "DATE": debit_rows.iloc[0].get("DATE", credit_rows.iloc[0].get("DATE", "2026-06-01")),
+            "DEBIT_ACC": self._format_lines(debit_lines, "account"),
+            "DEBIT_DESC": self._format_lines(debit_lines, "description"),
+            "CREDIT_ACC": self._format_lines(credit_lines, "account"),
+            "CREDIT_DESC": self._format_lines(credit_lines, "description"),
+            "AMOUNT": round(debit_total, 2),
+            "DEBIT_LINES": debit_lines,
+            "CREDIT_LINES": credit_lines,
+            "BALANCED_MATCH": True,
+            "MATCHED_ACCOUNTS": sorted(matched_accounts),
+        }
 
     def _synthesize_single_line_samples(self, doc_num, group, target_account_codes):
         synthesized = []
