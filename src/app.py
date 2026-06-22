@@ -26,6 +26,7 @@ KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
 SCENARIO_PREVIEW_SCHEMA_VERSION = 4
+SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 
 # Generate custom KPMG Favicon
 fav_svg = f"""
@@ -249,6 +250,12 @@ if "trial_balance_signature" not in st.session_state: st.session_state.trial_bal
 if "scenario_preview" not in st.session_state: st.session_state.scenario_preview = []
 if "scenario_preview_schema_version" not in st.session_state: st.session_state.scenario_preview_schema_version = None
 if "scroll_to_top" not in st.session_state: st.session_state.scroll_to_top = False
+
+def current_system_version():
+    return st.session_state.audit_context.get("system_version") or st.session_state.audit_context.get("system_name") or "SAP S/4 HANA"
+
+def is_s4_system():
+    return "S/4" in current_system_version()
 
 def go_to_step(step):
     st.session_state.current_step = step
@@ -875,7 +882,9 @@ if st.session_state.current_step == 1:
         c1, c2 = st.columns(2)
         with c1:
             entity_name = st.text_input("被审计单位", placeholder="输入公司名称")
-            system_name = st.text_input("测试系统/版本", value="SAP S/4HANA v2023")
+            saved_system_version = current_system_version()
+            system_index = SYSTEM_VERSION_OPTIONS.index(saved_system_version) if saved_system_version in SYSTEM_VERSION_OPTIONS else 1
+            system_name = st.selectbox("测试系统/版本", SYSTEM_VERSION_OPTIONS, index=system_index)
         with c2:
             period_start = st.date_input("审计起始日期", value=datetime.date(2026, 1, 1))
             period_end = st.date_input("审计截止日期", value=datetime.date(2026, 12, 31))
@@ -884,7 +893,7 @@ if st.session_state.current_step == 1:
         with col_btn[1]:
             if st.form_submit_button("下一步：上传清单", width="stretch"):
                 if entity_name and system_name:
-                    st.session_state.audit_context = {"entity_name": entity_name, "system_name": system_name, "period_start": str(period_start), "period_end": str(period_end)}
+                    st.session_state.audit_context = {"entity_name": entity_name, "system_name": system_name, "system_version": system_name, "period_start": str(period_start), "period_end": str(period_end)}
                     go_to_step(2)
                 else: st.error("❗ 请完整填写背景信息。")
 
@@ -946,7 +955,12 @@ elif st.session_state.current_step == 3:
         st.stop()
 
     st.subheader("步骤 3: 补充余额表并采集审计样本证据")
-    tb_file = st.file_uploader("可选：余额表（用于补充金额排序和部分科目名称）", type=["csv", "xlsx", "xls"])
+    if is_s4_system():
+        st.caption("SAP S/4 HANA：请上传手工整理过的编辑版科余表，或已按 ACDOCA 归集后的核对表；原始 ACDOCA 明细表过大时不建议直接上传。")
+        tb_label = "可选：S/4 编辑版科余表 / ACDOCA 归集核对表（用于补充金额排序和科目名称）"
+    else:
+        tb_label = "可选：余额表（用于补充金额排序和部分科目名称）"
+    tb_file = st.file_uploader(tb_label, type=["csv", "xlsx", "xls"])
     if tb_file:
         tb_signature = upload_signature(tb_file)
         if tb_signature != st.session_state.trial_balance_signature:
