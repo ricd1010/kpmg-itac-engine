@@ -238,6 +238,7 @@ if "session_id" not in st.session_state:
 if "current_step" not in st.session_state: st.session_state.current_step = 1
 if "audit_context" not in st.session_state: st.session_state.audit_context = {}
 if "ocr_samples" not in st.session_state: st.session_state.ocr_samples = []
+if "ocr_samples_editor_nonce" not in st.session_state: st.session_state.ocr_samples_editor_nonce = 0
 if "processed_image_names" not in st.session_state: st.session_state.processed_image_names = set()
 if "results" not in st.session_state: st.session_state.results = None
 if "api_key_valid" not in st.session_state: st.session_state.api_key_valid = False
@@ -1066,6 +1067,15 @@ elif st.session_state.current_step == 3:
         sample_scenario_options,
         help="选择具体场景时，本次样本只会生成该场景的 TOD/TOE；选择自动识别时，系统仅在唯一命中场景时自动填充，多个候选场景需要在预览表中手动选择。",
     )
+    if st.session_state.ocr_samples and sample_scenario_choice != AUTO_SCENARIO_LABEL:
+        synced_samples = apply_scenario_to_records(
+            st.session_state.ocr_samples,
+            sample_scenario_choice,
+            st.session_state.scenario_preview,
+        )
+        if synced_samples != st.session_state.ocr_samples:
+            st.session_state.ocr_samples = synced_samples
+            st.session_state.ocr_samples_editor_nonce += 1
     s1, s2 = st.columns(2)
     with s1: samples_file = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"])
     with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
@@ -1121,7 +1131,7 @@ elif st.session_state.current_step == 3:
             ocr_df,
             width="stretch",
             num_rows="dynamic",
-            key=f"ocr_samples_editor_{len(st.session_state.ocr_samples)}",
+            key=f"ocr_samples_editor_{len(st.session_state.ocr_samples)}_{sample_scenario_options.index(sample_scenario_choice)}_{st.session_state.ocr_samples_editor_nonce}",
             column_config={
                 "SCENARIO": st.column_config.SelectboxColumn("审计场景", options=sample_scenario_options, required=True),
                 "DOC_NUM": st.column_config.TextColumn("DOC_NUM", required=True),
