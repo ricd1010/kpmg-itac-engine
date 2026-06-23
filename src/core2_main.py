@@ -6,6 +6,8 @@ from llm_client import LLMClient
 class Core2Orchestrator:
     COUNTERPARTY_PLACEHOLDER = "OCR未识别对方科目"
     AUTO_SCENARIO_LABELS = {"", "auto", "自动识别", "自動識別", "automatic"}
+    SAMPLE_BASE_COLUMNS = ["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE", "SCENARIO"]
+    SAMPLE_OUTPUT_COLUMNS = SAMPLE_BASE_COLUMNS + ["AMT_SIGNED", "AMT_VAL", "SAKNR_CLEAN"]
 
     def __init__(self, data_dir):
         self.data_dir = data_dir
@@ -116,16 +118,19 @@ class Core2Orchestrator:
     @classmethod
     def normalize_samples_dataframe(cls, df):
         if df is None or df.empty:
-            return pd.DataFrame(columns=["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE", "SCENARIO", "AMT_SIGNED", "AMT_VAL", "SAKNR_CLEAN"])
+            return pd.DataFrame(columns=cls.SAMPLE_OUTPUT_COLUMNS)
 
         normalized = df.copy()
         normalized.columns = [str(c).strip().upper() for c in normalized.columns]
-        for col in ["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE", "SCENARIO"]:
+        for col in cls.SAMPLE_BASE_COLUMNS:
             if col not in normalized.columns:
                 normalized[col] = ""
 
         rows = [cls.normalize_sample_record(row.to_dict()) for _, row in normalized.iterrows()]
         normalized = pd.DataFrame(rows)
+        for col in cls.SAMPLE_BASE_COLUMNS:
+            if col not in normalized.columns:
+                normalized[col] = ""
         normalized["AMT_SIGNED"] = normalized["AMOUNT"].apply(cls._parse_signed_amount)
         normalized["AMT_VAL"] = normalized["AMT_SIGNED"].abs()
         normalized["SAKNR_CLEAN"] = normalized["SAKNR"].apply(cls._clean_acc)
@@ -133,6 +138,9 @@ class Core2Orchestrator:
             (normalized["DOC_NUM"].astype(str).str.strip() != "") &
             (normalized["SAKNR_CLEAN"].astype(str).str.strip() != "")
         ].copy()
+        for col in cls.SAMPLE_OUTPUT_COLUMNS:
+            if col not in normalized.columns:
+                normalized[col] = ""
         return normalized
 
     def generate_di_descriptions(self, identified_scenarios, audit_context=None):

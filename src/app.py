@@ -1153,6 +1153,9 @@ elif st.session_state.current_step == 3:
                         lines.append({"SCENARIO": s.get("SCENARIO"), "DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
                     s_df = pd.DataFrame(lines)
                 s_df = Core2Orchestrator.normalize_samples_dataframe(s_df)
+                for col in ["SCENARIO", "DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE"]:
+                    if col not in s_df.columns:
+                        s_df[col] = ""
                 if s_df["SCENARIO"].astype(str).str.strip().eq("").any():
                     st.error("请为每条样本指定审计场景；自动识别仅在唯一命中场景时会自动填充，多个候选场景需要手动选择。")
                     st.stop()

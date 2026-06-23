@@ -196,6 +196,17 @@ def test_normalize_samples_dataframe_removes_blank_docs_and_infers_direction():
     assert row["AMT_VAL"] == 9.0
 
 
+def test_normalize_samples_dataframe_always_returns_scenario_column():
+    df = pd.DataFrame([
+        {"DOC_NUM": "A", "SAKNR": "", "AMOUNT": "1"},
+    ])
+
+    normalized = Core2Orchestrator.normalize_samples_dataframe(df)
+
+    assert "SCENARIO" in normalized.columns
+    assert normalized.empty
+
+
 def test_parse_signed_amount_supports_sap_formats():
     assert Core2Orchestrator._parse_signed_amount("528,470.34") == 528470.34
     assert Core2Orchestrator._parse_signed_amount("528.470,34") == 528470.34
