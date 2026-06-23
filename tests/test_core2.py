@@ -103,6 +103,28 @@ def test_core2_keeps_balanced_pair_logic(tmp_path):
     assert "OCR_FALLBACK" not in sample
 
 
+def test_core2_respects_explicit_sample_scenario(tmp_path):
+    write_samples(tmp_path, [{
+        "DOC_NUM": "SCN-001",
+        "SAKNR": "1403000000",
+        "TXT50": "Shared account",
+        "AMOUNT": "100",
+        "SHKZG": "S",
+        "DATE": "2026-06-04",
+        "SCENARIO": "Completion",
+    }])
+    orchestrator = Core2Orchestrator(tmp_path)
+    orchestrator.llm_client = FakeLLM()
+
+    results = orchestrator.generate_di_descriptions([
+        {"name": "Purchase", "accounts": ["1403000000 (Shared account)"]},
+        {"name": "Completion", "accounts": ["1403000000 (Shared account)"]},
+    ])
+
+    assert [item["scenario"] for item in results] == ["Completion"]
+    assert results[0]["sample_table"]["SCENARIO"] == "Completion"
+
+
 def test_core2_balances_multi_line_sap_voucher_with_trailing_credit_minus(tmp_path):
     write_samples(tmp_path, [
         {

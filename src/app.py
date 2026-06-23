@@ -27,6 +27,7 @@ KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
 SCENARIO_PREVIEW_SCHEMA_VERSION = 4
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
+AUTO_SCENARIO_LABEL = "自动识别"
 
 # Generate custom KPMG Favicon
 fav_svg = f"""
@@ -370,6 +371,82 @@ def scenario_preview_needs_refresh():
 def ensure_scenario_preview_current():
     if scenario_preview_needs_refresh():
         refresh_scenario_preview()
+
+def clean_account_code(val):
+    if pd.isna(val):
+        return ""
+    text = str(val).strip().split(".")[0]
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return ""
+    return text.lstrip("0") if text != "0" else "0"
+
+def scenario_names_from_preview():
+    return [str(row.get("name")) for row in st.session_state.scenario_preview if row.get("name")]
+
+def scenario_account_lookup(ranked):
+    lookup = {}
+    for scenario in ranked or []:
+        name = str(scenario.get("name", ""))
+        if not name:
+            continue
+        accounts = set()
+        for account in scenario.get("raw_accounts", []):
+            code = clean_account_code(account)
+            if code:
+                accounts.add(code)
+        if not accounts:
+            for account in scenario.get("accounts", []):
+                code = clean_account_code(str(account).split(" ")[0])
+                if code:
+                    accounts.add(code)
+        lookup[name] = accounts
+    return lookup
+
+def infer_scenario_for_records(records, ranked):
+    sample_accounts = {
+        clean_account_code(record.get("SAKNR"))
+        for record in records or []
+        if clean_account_code(record.get("SAKNR"))
+    }
+    if not sample_accounts:
+        return AUTO_SCENARIO_LABEL
+    candidates = [
+        name
+        for name, accounts in scenario_account_lookup(ranked).items()
+        if accounts.intersection(sample_accounts)
+    ]
+    return candidates[0] if len(candidates) == 1 else AUTO_SCENARIO_LABEL
+
+def apply_scenario_to_records(records, selected_scenario, ranked):
+    if not records:
+        return []
+    enriched = [dict(record) for record in records]
+    if selected_scenario and selected_scenario != AUTO_SCENARIO_LABEL:
+        for record in enriched:
+            record["SCENARIO"] = selected_scenario
+        return enriched
+
+    by_doc = {}
+    for record in enriched:
+        by_doc.setdefault(str(record.get("DOC_NUM", "")), []).append(record)
+    for rows in by_doc.values():
+        inferred = infer_scenario_for_records(rows, ranked)
+        for record in rows:
+            if not record.get("SCENARIO"):
+                record["SCENARIO"] = inferred
+    return enriched
+
+def apply_scenario_to_dataframe(df, selected_scenario, ranked):
+    result = df.copy()
+    result.columns = [str(col).strip().upper() for col in result.columns]
+    if "SCENARIO" not in result.columns:
+        result["SCENARIO"] = ""
+    if selected_scenario and selected_scenario != AUTO_SCENARIO_LABEL:
+        result["SCENARIO"] = selected_scenario
+        return result
+
+    records = apply_scenario_to_records(result.to_dict("records"), AUTO_SCENARIO_LABEL, ranked)
+    return pd.DataFrame(records)
 
 def render_scenario_preview(ranked, show_amount=False):
     if not ranked:
@@ -983,6 +1060,12 @@ elif st.session_state.current_step == 3:
         render_scenario_preview(st.session_state.scenario_preview, show_amount=st.session_state.trial_balance_ready)
 
     st.write("---")
+    sample_scenario_options = [AUTO_SCENARIO_LABEL] + scenario_names_from_preview()
+    sample_scenario_choice = st.selectbox(
+        "本次上传样本对应审计场景",
+        sample_scenario_options,
+        help="选择具体场景时，本次样本只会生成该场景的 TOD/TOE；选择自动识别时，系统仅在唯一命中场景时自动填充，多个候选场景需要在预览表中手动选择。",
+    )
     s1, s2 = st.columns(2)
     with s1: samples_file = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"])
     with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
@@ -1008,12 +1091,15 @@ elif st.session_state.current_step == 3:
                         res = st.session_state.ocr_engine_inst.process_and_parse(img_bytes, llm_client=llm_c)
                         if "items" in res:
                             account_descriptions = load_account_description_map(SESSION_DATA_DIR)
+                            parsed_items = []
                             for it in res["items"]:
                                 if it.get("DOC_NUM") and str(it.get("DOC_NUM")).lower() != "null":
-                                    item_id = f"{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
-                                    if item_id not in [f"{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
-                                        it = enrich_samples_with_account_descriptions([it], account_descriptions)[0]
-                                        st.session_state.ocr_samples.append(it)
+                                    parsed_items.append(enrich_samples_with_account_descriptions([it], account_descriptions)[0])
+                            parsed_items = apply_scenario_to_records(parsed_items, sample_scenario_choice, st.session_state.scenario_preview)
+                            for it in parsed_items:
+                                item_id = f"{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
+                                if item_id not in [f"{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
+                                    st.session_state.ocr_samples.append(it)
                             st.session_state.processed_image_names.add(img.name)
                         status.update(label=f"✅ {img.name} 完成", state="complete")
             finally:
@@ -1022,10 +1108,13 @@ elif st.session_state.current_step == 3:
     if st.session_state.ocr_samples:
         st.write("**📋 已录入样本预览**")
         ocr_df = pd.DataFrame(st.session_state.ocr_samples)
-        preferred_columns = ["DOC_NUM", "DATE", "SAKNR", "TXT50", "AMOUNT", "SHKZG"]
+        preferred_columns = ["SCENARIO", "DOC_NUM", "DATE", "SAKNR", "TXT50", "AMOUNT", "SHKZG"]
         for col in preferred_columns:
             if col not in ocr_df.columns:
                 ocr_df[col] = ""
+        ocr_df["SCENARIO"] = ocr_df["SCENARIO"].apply(
+            lambda value: value if value in sample_scenario_options else AUTO_SCENARIO_LABEL
+        )
         remaining_columns = [col for col in ocr_df.columns if col not in preferred_columns]
         ocr_df = ocr_df[preferred_columns + remaining_columns]
         edited_ocr_df = st.data_editor(
@@ -1034,6 +1123,7 @@ elif st.session_state.current_step == 3:
             num_rows="dynamic",
             key=f"ocr_samples_editor_{len(st.session_state.ocr_samples)}",
             column_config={
+                "SCENARIO": st.column_config.SelectboxColumn("审计场景", options=sample_scenario_options, required=True),
                 "DOC_NUM": st.column_config.TextColumn("DOC_NUM", required=True),
                 "DATE": st.column_config.TextColumn("DATE"),
                 "SAKNR": st.column_config.TextColumn("SAKNR", required=True),
@@ -1052,19 +1142,22 @@ elif st.session_state.current_step == 3:
         btn_disabled = st.session_state.ocr_busy or (not samples_file and not st.session_state.ocr_samples)
         if st.button("🚀 生成最终底稿", width="stretch", disabled=btn_disabled):
             with st.spinner("AI 正在撰写穿行测试描述..."):
+                c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
                 if samples_file:
                     is_v, msg, s_df = DataValidator.validate_file(samples_file, "Samples")
                     if not is_v: st.error(msg); st.stop()
+                    s_df = apply_scenario_to_dataframe(s_df, sample_scenario_choice, ranked)
                 else:
                     lines = []
                     for s in st.session_state.ocr_samples:
-                        lines.append({"DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
+                        lines.append({"SCENARIO": s.get("SCENARIO"), "DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
                     s_df = pd.DataFrame(lines)
                 s_df = Core2Orchestrator.normalize_samples_dataframe(s_df)
-                s_df = s_df[["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE"]]
+                if s_df["SCENARIO"].astype(str).str.strip().eq("").any():
+                    st.error("请为每条样本指定审计场景；自动识别仅在唯一命中场景时会自动填充，多个候选场景需要手动选择。")
+                    st.stop()
+                s_df = s_df[["SCENARIO", "DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE"]]
                 s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding='utf-8-sig')
-                
-                c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
                 
                 # Debug: Show internal stats if results are weird
                 if not ranked:

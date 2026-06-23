@@ -5,6 +5,7 @@ from llm_client import LLMClient
 
 class Core2Orchestrator:
     COUNTERPARTY_PLACEHOLDER = "OCR未识别对方科目"
+    AUTO_SCENARIO_LABELS = {"", "auto", "自动识别", "自動識別", "automatic"}
 
     def __init__(self, data_dir):
         self.data_dir = data_dir
@@ -34,6 +35,11 @@ class Core2Orchestrator:
             return ""
         text = str(val).strip()
         return "" if text.lower() in {"nan", "none", "null"} else text
+
+    @classmethod
+    def _normalize_scenario(cls, val):
+        text = cls._clean_text(val)
+        return "" if text.lower() in cls.AUTO_SCENARIO_LABELS or text in cls.AUTO_SCENARIO_LABELS else text
 
     @classmethod
     def _parse_signed_amount(cls, val):
@@ -96,6 +102,7 @@ class Core2Orchestrator:
         saknr = cls._clean_text(record.get("SAKNR"))
         txt50 = cls._clean_text(record.get("TXT50")) or "未定义科目"
         date = cls._clean_text(record.get("DATE")) or "2026-06-01"
+        scenario = cls._normalize_scenario(record.get("SCENARIO"))
         return {
             "DOC_NUM": doc_num,
             "SAKNR": saknr,
@@ -103,16 +110,17 @@ class Core2Orchestrator:
             "AMOUNT": amount_text if amount_text else signed_amount,
             "SHKZG": cls._normalize_direction(record.get("SHKZG"), signed_amount),
             "DATE": date,
+            "SCENARIO": scenario,
         }
 
     @classmethod
     def normalize_samples_dataframe(cls, df):
         if df is None or df.empty:
-            return pd.DataFrame(columns=["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE", "AMT_SIGNED", "AMT_VAL", "SAKNR_CLEAN"])
+            return pd.DataFrame(columns=["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE", "SCENARIO", "AMT_SIGNED", "AMT_VAL", "SAKNR_CLEAN"])
 
         normalized = df.copy()
         normalized.columns = [str(c).strip().upper() for c in normalized.columns]
-        for col in ["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE"]:
+        for col in ["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE", "SCENARIO"]:
             if col not in normalized.columns:
                 normalized[col] = ""
 
@@ -148,6 +156,14 @@ class Core2Orchestrator:
             
             # 遍历所有凭证组
             for doc_num, group in grouped:
+                specified_scenarios = {
+                    self._normalize_scenario(value)
+                    for value in group.get("SCENARIO", pd.Series(dtype=str)).tolist()
+                    if self._normalize_scenario(value)
+                }
+                if specified_scenarios and scenario_name not in specified_scenarios:
+                    continue
+
                 doc_accounts = set(group['SAKNR_CLEAN'].tolist())
                 
                 # 如果该凭证包含场景中的任何科目
@@ -155,6 +171,7 @@ class Core2Orchestrator:
                     samples = self._synthesize_all_samples(doc_num, group, target_account_codes)
                     
                     for matching_sample in samples:
+                        matching_sample["SCENARIO"] = scenario_name
                         expected_logic = f"借: {matching_sample['DEBIT_DESC']} ({matching_sample['DEBIT_ACC']}); 贷: {matching_sample['CREDIT_DESC']} ({matching_sample['CREDIT_ACC']})"
                         
                         user_prompt = self.prompt_builder.build_prompt(

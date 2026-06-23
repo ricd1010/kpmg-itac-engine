@@ -238,6 +238,7 @@ class DataValidator:
             "DATE": ["date", "日期", "过账日期"],
             "AMOUNT": ["amount", "金额", "交易金额"],
             "SHKZG": ["shkzg", "借/贷标识", "S/H"],
+            "SCENARIO": ["scenario", "audit_scenario", "审计场景", "场景", "目标场景", "测试场景"],
             "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
             "KOMOK": ["komok", "科目修改", "修改码"]
         }

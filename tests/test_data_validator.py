@@ -69,6 +69,19 @@ def test_inf_sample_excel_maps_purchase_document_as_doc_num():
     assert df.iloc[0]["AMOUNT"] == -13.21
 
 
+def test_samples_maps_audit_scenario_column(tmp_path):
+    sample_path = tmp_path / "samples.csv"
+    sample_path.write_text(
+        "DOC_NUM,SAKNR,AMOUNT,审计场景\nS-001,1403000000,10,完工入库\n",
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(sample_path), "Samples")
+
+    assert ok, msg
+    assert df.iloc[0]["SCENARIO"] == "完工入库"
+
+
 def test_t030_keeps_account_modifier_separate_from_account_code():
     ok, msg, df = DataValidator.validate_file(
         MockUpload(REPO_ROOT / "data" / "xinxiwang" / "T030 HEBING.xlsx"),
