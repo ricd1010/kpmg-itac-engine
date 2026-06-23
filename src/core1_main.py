@@ -22,6 +22,19 @@ class Core1Orchestrator:
             "工单差异": [("PRD", ""), ("GBB", "AUF")],
             "产成品差异": [("UMSK", ""), ("PRD", "PRA")]
         }
+        # 金额归集使用更特异的自动记账规则，避免 BSX 等共享库存科目在多个场景重复计入。
+        self.amount_mappings = {
+            "销售发货": [("GBB", "VAX"), ("GBB", "VAY"), ("GISS", "")],
+            "销售入账": [("REV", ""), ("MWS", "")],
+            "销售成本结转": [("GBB", "VAX"), ("GBB", "VAY")],
+            "收款核销": [("AKTY", "")],
+            "采购收货": [("WRX", "")],
+            "采购入账": [("AKTP", ""), ("VST", "")],
+            "生产领料": [("GBB", "VBO"), ("GBB", "VBR")],
+            "完工入库": [("GBB", "AUF")],
+            "工单差异": [("PRD", "")],
+            "产成品差异": [("UMSK", ""), ("PRD", "PRA")]
+        }
 
     def _clean_acc(self, val):
         if pd.isna(val): return None
@@ -46,6 +59,11 @@ class Core1Orchestrator:
         if not s or s.lower() in {"nan", "none", "null"}:
             return "未指定公司"
         return s
+
+    def _rule_matches(self, ktosl, komok, rule_ktosl, rule_komok):
+        if ktosl != rule_ktosl:
+            return False
+        return not rule_komok or komok == rule_komok
 
     def _apply_baseline_flags(self, company_values):
         candidates = [item for item in company_values if item.get("account_values")]
@@ -83,6 +101,7 @@ class Core1Orchestrator:
         # 1. 解析 T030，提取已配置的科目
         # 结果结构：{ scenario_name: set(account_codes) }
         scenario_accounts = {name: set() for name in self.preset_mappings.keys()}
+        scenario_amount_accounts = {name: set() for name in self.preset_mappings.keys()}
         
         if os.path.exists(self.t030_path):
             try:
@@ -99,11 +118,14 @@ class Core1Orchestrator:
                     
                     for sc_name, rules in self.preset_mappings.items():
                         for r_ktosl, r_komok in rules:
-                            if ktosl == r_ktosl:
-                                # 匹配逻辑：规则没定义 KOMOK 或 显式定义且相等
-                                if not r_komok or (komok == r_komok):
-                                    if k1: scenario_accounts[sc_name].add(k1)
-                                    if k2: scenario_accounts[sc_name].add(k2)
+                            if self._rule_matches(ktosl, komok, r_ktosl, r_komok):
+                                if k1: scenario_accounts[sc_name].add(k1)
+                                if k2: scenario_accounts[sc_name].add(k2)
+                    for sc_name, rules in self.amount_mappings.items():
+                        for r_ktosl, r_komok in rules:
+                            if self._rule_matches(ktosl, komok, r_ktosl, r_komok):
+                                if k1: scenario_amount_accounts[sc_name].add(k1)
+                                if k2: scenario_amount_accounts[sc_name].add(k2)
             except Exception as e:
                 print(f"Core 1 - T030 解析失败: {e}")
 
@@ -176,13 +198,14 @@ class Core1Orchestrator:
         results = []
         for name, acc_set in scenario_accounts.items():
             acc_list = sorted(list(acc_set))
+            amount_acc_list = sorted(list(scenario_amount_accounts.get(name, set())))
             display_accounts = [f"{acc} ({acc_descs.get(acc, '未知科目')})" for acc in acc_list]
             company_values = []
             for company_code, amount_map in tb_amounts_by_company.items():
-                company_total = sum(amount_map.get(acc, 0) for acc in acc_list)
+                company_total = sum(amount_map.get(acc, 0) for acc in amount_acc_list)
                 if company_total:
                     account_values = []
-                    for acc in acc_list:
+                    for acc in amount_acc_list:
                         account_total = amount_map.get(acc, 0)
                         if account_total:
                             account_values.append({
@@ -202,7 +225,8 @@ class Core1Orchestrator:
                 "name": name,
                 "accounts": display_accounts,
                 "raw_accounts": acc_list,
-                "total_value": sum(tb_amounts.get(acc, 0) for acc in acc_list),
+                "amount_accounts": amount_acc_list,
+                "total_value": sum(tb_amounts.get(acc, 0) for acc in amount_acc_list),
                 "company_values": company_values,
                 "baseline_company_code": baseline_company_code,
                 "baseline_account_codes": baseline_account_codes,

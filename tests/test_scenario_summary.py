@@ -33,9 +33,13 @@ def test_build_scenario_account_totals_sums_same_account_across_companies():
     gr_ir = next(row for row in rows if row["account"] == "2202040000")
     assert raw_material["scenario"] == "采购收货"
     assert raw_material["total_value"] == 17.0
+    assert raw_material["scenario_total_value"] == 22.0
+    assert round(raw_material["amount_share_pct"], 2) == 77.27
     assert raw_material["company_count"] == 2
     assert raw_material["company_codes"] == ["4000", "4010"]
     assert gr_ir["total_value"] == 5.0
+    assert gr_ir["scenario_total_value"] == 22.0
+    assert round(gr_ir["amount_share_pct"], 2) == 22.73
     assert gr_ir["company_count"] == 1
     assert gr_ir["extra_company_count"] == 1
 

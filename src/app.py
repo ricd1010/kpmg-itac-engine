@@ -25,7 +25,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 4
+SCENARIO_PREVIEW_SCHEMA_VERSION = 6
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -504,6 +504,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 f"<td><span class='summary-account-code'>{html.escape(str(row.get('account', '')))}</span></td>"
                 f"<td>{html.escape(str(row.get('description', '未知科目')))}</td>"
                 f"<td class='amount'>{float(row.get('total_value', 0) or 0):,.2f}</td>"
+                f"<td class='amount-share'>{float(row.get('amount_share_pct', 0) or 0):.2f}%</td>"
                 f"<td class='summary-company-count' title='{html.escape(company_codes_text)}'>{int(row.get('company_count', 0) or 0)}</td>"
                 f"<td>{extra_note}</td>"
                 "</tr>"
@@ -514,7 +515,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 "<section class='scenario-total-summary'>"
                 "<div class='summary-title'>场景科目总金额汇总</div>"
                 "<table class='scenario-total-table'>"
-                "<thead><tr><th>审计场景</th><th>科目编码</th><th>科目描述</th><th class='amount'>总金额</th><th>命中公司数</th><th>提示</th></tr></thead>"
+                "<thead><tr><th>审计场景</th><th>科目编码</th><th>科目描述</th><th class='amount'>总金额</th><th class='amount-share'>占比</th><th>命中公司数</th><th>提示</th></tr></thead>"
                 f"<tbody>{''.join(summary_rows)}</tbody>"
                 "</table>"
                 "</section>"
@@ -555,7 +556,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 f"<span>公司代码 {html.escape(company_code)}</span>"
                 "</summary>"
                 "<table class='company-scenario-table'>"
-                "<thead><tr><th>审计场景</th><th class='amount'>场景金额</th><th>关联科目 / 科目描述 / 金额</th></tr></thead>"
+                "<thead><tr><th>审计场景</th><th class='amount'>场景金额</th><th>金额归集科目 / 科目描述 / 金额</th></tr></thead>"
                 f"<tbody>{''.join(scenario_rows)}</tbody>"
                 "</table>"
                 "</details>"
@@ -626,6 +627,11 @@ def render_scenario_preview(ranked, show_amount=False):
                 white-space: nowrap;
             }}
             .summary-company-count {{
+                text-align: right;
+                white-space: nowrap;
+            }}
+            .scenario-total-table .amount,
+            .scenario-total-table .amount-share {{
                 text-align: right;
                 white-space: nowrap;
             }}

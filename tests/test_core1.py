@@ -63,7 +63,11 @@ def test_core1_preview_runs_without_trial_balance(tmp_path):
 
 def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
     (tmp_path / "T030.csv").write_text(
-        "KTOSL,KOMOK,KONTS,KONTH\nBSX,,1403000000,2202040000\n",
+        "\n".join([
+            "KTOSL,KOMOK,KONTS,KONTH",
+            "BSX,,1403000000,1403000000",
+            "WRX,,2202040000,2202040000",
+        ]),
         encoding="utf-8-sig",
     )
     (tmp_path / "SKAT.csv").write_text(
@@ -79,6 +83,7 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
             "4000,202502,2202040000,应付账款-GR/IR,7,-700,9999,8888",
             "4010,202501,1403000000,原材料,5,-500,9999,8888",
             "4010,202503,1403000000,原材料,3,-300,9999,8888",
+            "4010,202503,2202040000,应付账款-GR/IR,5,-500,9999,8888",
         ]),
         encoding="utf-8-sig",
     )
@@ -87,39 +92,34 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
     purchase_receipt = next(result for result in results if result["name"] == "采购收货")
     sales_entry = next(result for result in results if result["name"] == "销售入账")
 
-    assert purchase_receipt["total_value"] == 37.0
+    assert purchase_receipt["raw_accounts"] == ["1403000000", "2202040000"]
+    assert purchase_receipt["amount_accounts"] == ["2202040000"]
+    assert purchase_receipt["total_value"] == 12.0
     assert purchase_receipt["baseline_company_code"] == "4010"
-    assert purchase_receipt["baseline_account_codes"] == ["1403000000"]
-    assert purchase_receipt["extra_account_count"] == 1
+    assert purchase_receipt["baseline_account_codes"] == ["2202040000"]
+    assert purchase_receipt["extra_account_count"] == 0
     assert purchase_receipt["company_values"] == [
         {
             "company_code": "4000",
-            "total_value": 34.0,
+            "total_value": 7.0,
             "account_values": [
-                {
-                    "account": "1403000000",
-                    "description": "原材料",
-                    "total_value": 27.0,
-                    "is_extra": False,
-                    "baseline_company_code": "4010",
-                },
                 {
                     "account": "2202040000",
                     "description": "应付账款-GR/IR",
                     "total_value": 7.0,
-                    "is_extra": True,
+                    "is_extra": False,
                     "baseline_company_code": "4010",
                 },
             ],
         },
         {
             "company_code": "4010",
-            "total_value": 3.0,
+            "total_value": 5.0,
             "account_values": [
                 {
-                    "account": "1403000000",
-                    "description": "原材料",
-                    "total_value": 3.0,
+                    "account": "2202040000",
+                    "description": "应付账款-GR/IR",
+                    "total_value": 5.0,
                     "is_extra": False,
                     "baseline_company_code": "4010",
                 },
@@ -136,21 +136,30 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
 
 def test_core1_baseline_tie_breaks_by_amount_then_company_code(tmp_path):
     (tmp_path / "T030.csv").write_text(
-        "KTOSL,KOMOK,KONTS,KONTH\nBSX,,1403000000,2202040000\n",
+        "\n".join([
+            "KTOSL,KOMOK,KONTS,KONTH",
+            "BSX,,1403000000,1403000000",
+            "WRX,,2202040000,2202040000",
+            "WRX,,2221010101,2221010101",
+        ]),
         encoding="utf-8-sig",
     )
     (tmp_path / "SKAT.csv").write_text(
-        "SAKNR,TXT50\n1403000000,原材料\n2202040000,应付账款-GR/IR\n",
+        "SAKNR,TXT50\n1403000000,原材料\n2202040000,应付账款-GR/IR\n2221010101,进项税额\n",
         encoding="utf-8-sig",
     )
     (tmp_path / "TrialBalance.csv").write_text(
         "\n".join([
             "COMPANY_CODE,PERIOD,SAKNR,TXT50,DMBTR_DEBIT",
-            "4000,202502,1403000000,原材料,20",
-            "4010,202502,1403000000,原材料,10",
-            "4020,202502,1403000000,原材料,10",
-            "4030,202502,1403000000,原材料,10",
-            "4030,202502,2202040000,应付账款-GR/IR,1",
+            "4000,202502,1403000000,原材料,100",
+            "4000,202502,2202040000,应付账款-GR/IR,20",
+            "4010,202502,1403000000,原材料,100",
+            "4010,202502,2202040000,应付账款-GR/IR,10",
+            "4020,202502,1403000000,原材料,100",
+            "4020,202502,2202040000,应付账款-GR/IR,10",
+            "4030,202502,1403000000,原材料,100",
+            "4030,202502,2202040000,应付账款-GR/IR,10",
+            "4030,202502,2221010101,进项税额,1",
         ]),
         encoding="utf-8-sig",
     )
@@ -161,14 +170,72 @@ def test_core1_baseline_tie_breaks_by_amount_then_company_code(tmp_path):
     extra_4030 = [account for account in company_4030["account_values"] if account["is_extra"]]
 
     assert purchase_receipt["baseline_company_code"] == "4010"
-    assert purchase_receipt["baseline_account_codes"] == ["1403000000"]
+    assert purchase_receipt["baseline_account_codes"] == ["2202040000"]
     assert purchase_receipt["extra_account_count"] == 1
     assert extra_4030 == [{
-        "account": "2202040000",
-        "description": "应付账款-GR/IR",
+        "account": "2221010101",
+        "description": "进项税额",
         "total_value": 1.0,
         "is_extra": True,
         "baseline_company_code": "4010",
+    }]
+
+
+def test_core1_uses_specific_amount_accounts_to_avoid_shared_bsx_duplication(tmp_path):
+    (tmp_path / "T030.csv").write_text(
+        "\n".join([
+            "KTOSL,KOMOK,KONTS,KONTH",
+            "BSX,,1403000000,1405010000",
+            "WRX,,2202040000,2202040000",
+            "GBB,VBO,5001010100,5001010100",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "SKAT.csv").write_text(
+        "\n".join([
+            "SAKNR,TXT50",
+            "1403000000,原材料",
+            "1405010000,库存商品",
+            "2202040000,应付账款-GR/IR",
+            "5001010100,生产成本-原材料",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "TrialBalance.csv").write_text(
+        "\n".join([
+            "COMPANY_CODE,PERIOD,SAKNR,TXT50,DMBTR_DEBIT",
+            "4390,202512,1403000000,原材料,8237293.60",
+            "4390,202512,1405010000,库存商品,721019.34",
+            "4390,202512,2202040000,应付账款-GR/IR,100",
+            "4390,202512,5001010100,生产成本-原材料,200",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    results = Core1Orchestrator(tmp_path).run()
+    purchase_receipt = next(result for result in results if result["name"] == "采购收货")
+    production_issue = next(result for result in results if result["name"] == "生产领料")
+
+    assert set(purchase_receipt["raw_accounts"]) == {"1403000000", "1405010000", "2202040000"}
+    assert purchase_receipt["amount_accounts"] == ["2202040000"]
+    assert purchase_receipt["total_value"] == 100
+    assert purchase_receipt["company_values"][0]["account_values"] == [{
+        "account": "2202040000",
+        "description": "应付账款-GR/IR",
+        "total_value": 100.0,
+        "is_extra": False,
+        "baseline_company_code": "4390",
+    }]
+
+    assert set(production_issue["raw_accounts"]) == {"1403000000", "1405010000", "5001010100"}
+    assert production_issue["amount_accounts"] == ["5001010100"]
+    assert production_issue["total_value"] == 200
+    assert production_issue["company_values"][0]["account_values"] == [{
+        "account": "5001010100",
+        "description": "生产成本-原材料",
+        "total_value": 200.0,
+        "is_extra": False,
+        "baseline_company_code": "4390",
     }]
 
 if __name__ == "__main__":

@@ -24,13 +24,17 @@ def build_scenario_account_totals(ranked):
                 if description and entry["description"] == "未知科目":
                     entry["description"] = description
 
+        scenario_total = sum(float(entry["total_value"]) for entry in by_account.values())
         for entry in by_account.values():
             company_codes = sorted(entry["company_codes"])
+            total_value = float(entry["total_value"])
             rows.append({
                 "scenario": entry["scenario"],
                 "account": entry["account"],
                 "description": entry["description"],
-                "total_value": entry["total_value"],
+                "total_value": total_value,
+                "scenario_total_value": scenario_total,
+                "amount_share_pct": (total_value / scenario_total * 100) if scenario_total else 0.0,
                 "company_count": len(company_codes),
                 "company_codes": company_codes,
                 "extra_company_count": entry["extra_company_count"],
