@@ -35,6 +35,18 @@ class Core1Orchestrator:
             "工单差异": [("PRD", "")],
             "产成品差异": [("UMSK", ""), ("PRD", "PRA")]
         }
+        self.amount_account_include_prefixes = {
+            # GBB-AUF 中可能混入物料消耗等费用科目，完工入库金额只取完工转出科目。
+            "完工入库": ("500108", "500109"),
+        }
+        self.amount_rule_exclusions = {
+            # PRD-PRA 已单独作为产成品差异，避免同时进入工单差异。
+            "工单差异": [("PRD", "PRA")],
+        }
+        self.amount_account_exclusion_sources = {
+            # 同一差异科目可能同时配置多个 PRD 修改码；产成品差异优先于工单差异。
+            "工单差异": ("产成品差异",),
+        }
 
     def _clean_acc(self, val):
         if pd.isna(val): return None
@@ -64,6 +76,30 @@ class Core1Orchestrator:
         if ktosl != rule_ktosl:
             return False
         return not rule_komok or komok == rule_komok
+
+    def _amount_rule_excluded(self, scenario_name, ktosl, komok):
+        return any(
+            self._rule_matches(ktosl, komok, rule_ktosl, rule_komok)
+            for rule_ktosl, rule_komok in self.amount_rule_exclusions.get(scenario_name, [])
+        )
+
+    def _account_allowed_for_amount(self, scenario_name, account_code):
+        prefixes = self.amount_account_include_prefixes.get(scenario_name)
+        if not prefixes:
+            return True
+        return any(str(account_code).startswith(prefix) for prefix in prefixes)
+
+    def _add_amount_account(self, scenario_amount_accounts, scenario_name, account_code):
+        if account_code and self._account_allowed_for_amount(scenario_name, account_code):
+            scenario_amount_accounts[scenario_name].add(account_code)
+
+    def _apply_amount_account_precedence(self, scenario_amount_accounts):
+        for scenario_name, source_names in self.amount_account_exclusion_sources.items():
+            target_accounts = scenario_amount_accounts.get(scenario_name)
+            if target_accounts is None:
+                continue
+            for source_name in source_names:
+                target_accounts.difference_update(scenario_amount_accounts.get(source_name, set()))
 
     def _apply_baseline_flags(self, company_values):
         candidates = [item for item in company_values if item.get("account_values")]
@@ -122,12 +158,15 @@ class Core1Orchestrator:
                                 if k1: scenario_accounts[sc_name].add(k1)
                                 if k2: scenario_accounts[sc_name].add(k2)
                     for sc_name, rules in self.amount_mappings.items():
+                        if self._amount_rule_excluded(sc_name, ktosl, komok):
+                            continue
                         for r_ktosl, r_komok in rules:
                             if self._rule_matches(ktosl, komok, r_ktosl, r_komok):
-                                if k1: scenario_amount_accounts[sc_name].add(k1)
-                                if k2: scenario_amount_accounts[sc_name].add(k2)
+                                self._add_amount_account(scenario_amount_accounts, sc_name, k1)
+                                self._add_amount_account(scenario_amount_accounts, sc_name, k2)
             except Exception as e:
                 print(f"Core 1 - T030 解析失败: {e}")
+        self._apply_amount_account_precedence(scenario_amount_accounts)
 
         # 2. 读取 SKAT 获取描述 (辅助展示)
         acc_descs = {}

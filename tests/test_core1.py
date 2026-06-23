@@ -238,6 +238,115 @@ def test_core1_uses_specific_amount_accounts_to_avoid_shared_bsx_duplication(tmp
         "baseline_company_code": "4390",
     }]
 
+
+def test_core1_filters_completion_amount_accounts_to_completion_transfer_accounts(tmp_path):
+    (tmp_path / "T030.csv").write_text(
+        "\n".join([
+            "KTOSL,KOMOK,KONTS,KONTH",
+            "BSX,,1405020000,1405020000",
+            "GBB,AUF,5001080000,5001080000",
+            "GBB,AUF,5001090000,5001090000",
+            "GBB,AUF,8017050000,8017050000",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "SKAT.csv").write_text(
+        "\n".join([
+            "SAKNR,TXT50",
+            "1405020000,库存商品-自制成品",
+            "5001080000,生产成本-半成品完工转出",
+            "5001090000,生产成本-产成品完工转出",
+            "8017050000,物料消耗-原材料",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "TrialBalance.csv").write_text(
+        "\n".join([
+            "COMPANY_CODE,PERIOD,SAKNR,TXT50,DMBTR_DEBIT",
+            "4390,202512,1405020000,库存商品-自制成品,1000",
+            "4390,202512,5001080000,生产成本-半成品完工转出,60",
+            "4390,202512,5001090000,生产成本-产成品完工转出,40",
+            "4390,202512,8017050000,物料消耗-原材料,59712672.98",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    results = Core1Orchestrator(tmp_path).run()
+    completion = next(result for result in results if result["name"] == "完工入库")
+
+    assert set(completion["raw_accounts"]) == {"1405020000", "5001080000", "5001090000", "8017050000"}
+    assert completion["amount_accounts"] == ["5001080000", "5001090000"]
+    assert completion["total_value"] == 100
+    assert completion["company_values"][0]["account_values"] == [
+        {
+            "account": "5001080000",
+            "description": "生产成本-半成品完工转出",
+            "total_value": 60.0,
+            "is_extra": False,
+            "baseline_company_code": "4390",
+        },
+        {
+            "account": "5001090000",
+            "description": "生产成本-产成品完工转出",
+            "total_value": 40.0,
+            "is_extra": False,
+            "baseline_company_code": "4390",
+        },
+    ]
+
+
+def test_core1_keeps_prd_pra_only_in_finished_goods_variance_amounts(tmp_path):
+    (tmp_path / "T030.csv").write_text(
+        "\n".join([
+            "KTOSL,KOMOK,KONTS,KONTH",
+            "PRD,PRA,1403010200,1403010200",
+            "PRD,PRF,1403010200,1403010200",
+            "PRD,PRF,1403010400,1403010400",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "SKAT.csv").write_text(
+        "\n".join([
+            "SAKNR,TXT50",
+            "1403010200,原材料-差异-物料转物料差异",
+            "1403010400,原材料-差异-差异",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "TrialBalance.csv").write_text(
+        "\n".join([
+            "COMPANY_CODE,PERIOD,SAKNR,TXT50,DMBTR_DEBIT",
+            "4390,202512,1403010200,原材料-差异-物料转物料差异,100",
+            "4390,202512,1403010400,原材料-差异-差异,200",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    results = Core1Orchestrator(tmp_path).run()
+    work_order_variance = next(result for result in results if result["name"] == "工单差异")
+    finished_goods_variance = next(result for result in results if result["name"] == "产成品差异")
+
+    assert set(work_order_variance["raw_accounts"]) == {"1403010200", "1403010400"}
+    assert work_order_variance["amount_accounts"] == ["1403010400"]
+    assert work_order_variance["total_value"] == 200
+    assert work_order_variance["company_values"][0]["account_values"] == [{
+        "account": "1403010400",
+        "description": "原材料-差异-差异",
+        "total_value": 200.0,
+        "is_extra": False,
+        "baseline_company_code": "4390",
+    }]
+
+    assert finished_goods_variance["amount_accounts"] == ["1403010200"]
+    assert finished_goods_variance["total_value"] == 100
+    assert finished_goods_variance["company_values"][0]["account_values"] == [{
+        "account": "1403010200",
+        "description": "原材料-差异-物料转物料差异",
+        "total_value": 100.0,
+        "is_extra": False,
+        "baseline_company_code": "4390",
+    }]
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__])
