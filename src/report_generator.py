@@ -6,6 +6,61 @@ class ReportGenerator:
     def __init__(self, output_dir):
         self.output_path = os.path.join(output_dir, "WorkingPaper_Final.xlsx")
 
+    @staticmethod
+    def _is_placeholder_account(value):
+        text = str(value or "").strip()
+        if not text:
+            return True
+        return "OCR未识别" in text or "未识别对方科目" in text
+
+    @classmethod
+    def _sample_to_toe_rows(cls, sample):
+        doc_num = sample.get("DOC_NUM", "")
+        date = sample.get("DATE", "N/A")
+        rows = []
+
+        for direction, key in (("借方", "DEBIT_LINES"), ("贷方", "CREDIT_LINES")):
+            for line in sample.get(key) or []:
+                rows.append({
+                    "doc_num": doc_num,
+                    "direction": direction,
+                    "account": line.get("account", ""),
+                    "description": line.get("description", ""),
+                    "amount": line.get("amount", 0),
+                    "date": date,
+                })
+
+        if rows:
+            return rows
+
+        for direction, account_key, desc_key in (
+            ("借方", "DEBIT_ACC", "DEBIT_DESC"),
+            ("贷方", "CREDIT_ACC", "CREDIT_DESC"),
+        ):
+            account = sample.get(account_key, "")
+            if cls._is_placeholder_account(account):
+                continue
+            rows.append({
+                "doc_num": doc_num,
+                "direction": direction,
+                "account": account,
+                "description": sample.get(desc_key, ""),
+                "amount": sample.get("AMOUNT", 0),
+                "date": date,
+            })
+
+        if rows:
+            return rows
+
+        return [{
+            "doc_num": doc_num,
+            "direction": "",
+            "account": sample.get("DEBIT_ACC", ""),
+            "description": sample.get("DEBIT_DESC", ""),
+            "amount": sample.get("AMOUNT", 0),
+            "date": date,
+        }]
+
     def generate(self, ranked_scenarios, di_results, audit_context=None):
         if audit_context is None:
             audit_context = {}
@@ -85,6 +140,7 @@ class ReportGenerator:
             ws.column_dimensions['F'].width = 15
             ws.column_dimensions['G'].width = 15
             ws.column_dimensions['H'].width = 60
+            ws.column_dimensions['I'].width = 15
 
             # Row 2: Header
             ws.merge_cells("D2:H2")
@@ -141,21 +197,30 @@ class ReportGenerator:
             # TOE Section (Sample List) below the D&I grid
             start_row = 26
             ws.cell(row=start_row, column=4, value="二、测试样本明细 (TOE)").font = Font(bold=True)
-            headers_toe = ["凭证号", "科目", "描述", "金额", "日期"]
+            headers_toe = ["凭证号", "借贷方向", "科目", "描述", "金额", "日期"]
             for i, h in enumerate(headers_toe):
                 cell = ws.cell(row=start_row+1, column=4+i, value=h)
                 cell.font = Font(bold=True)
                 cell.fill = PatternFill(start_color="E5E5E5", end_color="E5E5E5", fill_type="solid")
                 cell.border = thin_border
             
-            for idx, res in enumerate(results):
-                row_idx = start_row + 2 + idx
+            row_idx = start_row + 2
+            for res in results:
                 s = res['sample_table']
-                ws.cell(row=row_idx, column=4, value=s['DOC_NUM']).border = thin_border
-                ws.cell(row=row_idx, column=5, value=s['DEBIT_ACC']).border = thin_border
-                ws.cell(row=row_idx, column=6, value=s['DEBIT_DESC']).border = thin_border
-                ws.cell(row=row_idx, column=7, value=s['AMOUNT']).border = thin_border
-                ws.cell(row=row_idx, column=8, value=s.get('DATE', 'N/A')).border = thin_border
+                for toe_row in self._sample_to_toe_rows(s):
+                    values = [
+                        toe_row["doc_num"],
+                        toe_row["direction"],
+                        toe_row["account"],
+                        toe_row["description"],
+                        toe_row["amount"],
+                        toe_row["date"],
+                    ]
+                    for offset, value in enumerate(values):
+                        cell = ws.cell(row=row_idx, column=4+offset, value=value)
+                        cell.border = thin_border
+                        cell.alignment = Alignment(wrap_text=True, vertical="top")
+                    row_idx += 1
 
         wb.save(self.output_path)
         return self.output_path
