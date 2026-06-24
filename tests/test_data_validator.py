@@ -114,6 +114,34 @@ def test_t030_maps_valuation_group_and_class(tmp_path):
     assert df.iloc[0]["BKLAS"] == "7900"
 
 
+def test_t030_sap_text_export_preserves_empty_tab_columns(tmp_path):
+    t030_path = tmp_path / "t030.xls"
+    t030_path.write_text(
+        "\n".join([
+            "2026.06.24\t动态清单显示\t1",
+            "",
+            "\t类\t帐表\tTrs\t代码\tAM\tValCl\t总帐科目\t总帐科目",
+            "\t800\t4000\tWRX\t\t\t\t2202030100\t2202030100",
+            "\t800\t4000\tGBB\t4000\tVAX\t3400\t6402020000\t6402020000",
+        ]),
+        encoding="utf-16",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(t030_path), "T030")
+
+    assert ok, msg
+    assert {"KTOSL", "KOMOK", "BWMOD", "BKLAS", "KONTS", "KONTH"}.issubset(df.columns)
+    assert not any(str(col).startswith("Col_") for col in df.columns)
+    wrx = df[df["KTOSL"] == "WRX"].iloc[0]
+    assert wrx["KONTS"] == "2202030100"
+    assert wrx["KONTH"] == "2202030100"
+    assert wrx["KOMOK"] == ""
+    gbb_vax = df[(df["KTOSL"] == "GBB") & (df["KOMOK"] == "VAX")].iloc[0]
+    assert gbb_vax["BWMOD"] == "4000"
+    assert gbb_vax["BKLAS"] == "3400"
+    assert gbb_vax["KONTS"] == "6402020000"
+
+
 def test_samples_maps_material_number(tmp_path):
     sample_path = tmp_path / "samples.csv"
     sample_path.write_text(
@@ -150,6 +178,33 @@ def test_trial_balance_maps_company_period_and_monthly_debit_columns(tmp_path):
     assert df.iloc[0]["SAKNR"] == "1403000000"
     assert df.iloc[0]["DMBTR_DEBIT"] == 10.0
     assert df.iloc[0]["DMBTR_CREDIT"] == -10.0
+
+
+def test_trial_balance_sap_text_export_maps_company_column(tmp_path):
+    tb_path = tmp_path / "trial_balance.xls"
+    tb_path.write_text(
+        "\n".join([
+            "青岛新希望琴牌乳业有限公司\t总账科目余额\t时间 18:10:00",
+            "前一期间 00-00 2026 报表期间 01-05 2026",
+            "",
+            "\t\t公司\t总帐科目\t\t短文本\t货币\t\t部门\t已结转余额\t前一期间的余额\t在制表期间的借方余额\t报表期间的贷方余额\t累计余额",
+            "\t\t4110\t1403999999\t\t原材料差异\tCNY\t\t\t0.00\t0.00\t1,234.56\t0.00\t1,234.56",
+            "\t\t公司\t总帐科目\t\t短文本\t货币\t\t部门\t已结转余额\t前一期间的余额\t在制表期间的借方余额\t报表期间的贷方余额\t累计余额",
+            "\t*\t\tCNY\t\t\t0.00\t\t0.00\t8,039,935,274.81\t8,039,935,274.81\t0.00",
+        ]),
+        encoding="utf-16",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(tb_path), "TrialBalance")
+
+    assert ok, msg
+    assert {"COMPANY_CODE", "SAKNR", "TXT50", "DMBTR_DEBIT", "DMBTR_CREDIT"}.issubset(df.columns)
+    assert len(df) == 1
+    assert not any(str(col).startswith("Col_") for col in df.columns)
+    assert df.iloc[0]["COMPANY_CODE"] == "4110"
+    assert df.iloc[0]["SAKNR"] == "1403999999"
+    assert df.iloc[0]["TXT50"] == "原材料差异"
+    assert df.iloc[0]["DMBTR_DEBIT"] == 1234.56
 
 
 def test_trial_balance_excel_reads_first_sheet_only(tmp_path):

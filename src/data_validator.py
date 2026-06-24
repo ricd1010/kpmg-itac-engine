@@ -32,7 +32,26 @@ class DataValidator:
                 except Exception:
                     pass
 
-            # --- 阶段 2：分隔符文本（CSV/TSV 等） ---
+            # --- 阶段 2：SAP 文本导出（保留空 Tab 列，避免 T030/科余表错位） ---
+            if df is None:
+                for enc in DataValidator.TEXT_ENCODINGS:
+                    try:
+                        text = raw_content.decode(enc)
+                        if "\t" not in text:
+                            continue
+                        lines = [line.rstrip("\r") for line in text.splitlines() if line.strip()]
+                        split_data = [line.split("\t") for line in lines]
+                        if split_data:
+                            max_cols = max(len(r) for r in split_data)
+                            normalized_data = [r + [""] * (max_cols - len(r)) for r in split_data]
+                            df_raw = pd.DataFrame(normalized_data)
+                            df = DataValidator._find_real_header(df_raw, file_type)
+                            if df is not None:
+                                break
+                    except Exception:
+                        continue
+
+            # --- 阶段 3：分隔符文本（CSV/TSV 等） ---
             if df is None:
                 for enc in DataValidator.TEXT_ENCODINGS:
                     try:
@@ -50,7 +69,7 @@ class DataValidator:
                     except Exception:
                         continue
 
-            # --- 阶段 3：固定宽度/空格文本拆解 ---
+            # --- 阶段 4：固定宽度/空格文本拆解 ---
             if df is None:
                 for enc in DataValidator.TEXT_ENCODINGS:
                     try:
@@ -68,7 +87,7 @@ class DataValidator:
                             if df is not None: break
                     except: continue
 
-            # --- 阶段 4：HTML ---
+            # --- 阶段 5：HTML ---
             if df is None:
                 try:
                     df_raw = pd.read_html(io.BytesIO(raw_content))[0]
@@ -78,7 +97,7 @@ class DataValidator:
             if df is None:
                 return False, "无法读取文件，格式识别失败。", None
 
-            # --- 阶段 5：列名映射 ---
+            # --- 阶段 6：列名映射 ---
             df.columns = [str(c).strip() for c in df.columns]
             df = DataValidator._map_columns(df, file_type)
             
@@ -103,10 +122,12 @@ class DataValidator:
                 df = DataValidator._positional_fallback(df)
                 missing = [col for col in required if col not in df.columns]
 
+            df = DataValidator._drop_export_artifacts(df, file_type)
+
             if missing:
                 return False, f"表缺失必要字段: {', '.join(missing)}。检测到列: {df.columns.tolist()}", None
 
-            # --- 阶段 6：物理列清洗 (防重名) ---
+            # --- 阶段 7：物理列清洗 (防重名) ---
             new_col_names = []
             counts = {}
             for c in df.columns:
@@ -130,6 +151,32 @@ class DataValidator:
             return True, "验证通过", df
         except Exception as e:
             return False, f"验证器异常: {str(e)}", None
+
+    @staticmethod
+    def _drop_export_artifacts(df, file_type):
+        df = df.copy()
+
+        if file_type == "T030" and "KTOSL" in df.columns:
+            ktosl = df["KTOSL"].astype(str).str.strip().str.lower()
+            df = df[~ktosl.isin({"trs", "ktosl", "事务", "交易变式", "事务码"})]
+        elif file_type == "TrialBalance" and "SAKNR" in df.columns:
+            saknr_raw = df["SAKNR"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+            saknr = saknr_raw.str.lower()
+            header_values = {"总帐科目", "总账科目", "科目编码", "科目代码", "saknr", "g/l account", "科目"}
+            empty_values = {"", "nan", "none", "null"}
+            df = df[~saknr.isin(header_values | empty_values) & saknr_raw.str.match(r"^\d+$")]
+
+        empty_col_names = []
+        for col in df.columns:
+            if not str(col).startswith("Col_"):
+                continue
+            values = df[col].astype(str).str.strip().str.lower()
+            if values.isin({"", "nan", "none", "null"}).all():
+                empty_col_names.append(col)
+        if empty_col_names:
+            df = df.drop(columns=empty_col_names)
+
+        return df.reset_index(drop=True)
 
     @staticmethod
     def _find_real_header(df_raw, file_type):
@@ -242,21 +289,21 @@ class DataValidator:
             "SHKZG": ["shkzg", "借/贷标识", "S/H"],
             "SCENARIO": ["scenario", "audit_scenario", "审计场景", "场景", "目标场景", "测试场景"],
             "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
-            "KOMOK": ["komok", "科目修改", "修改码"],
+            "KOMOK": ["komok", "科目修改", "修改码", "AM"],
             "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "物料代码", "Material"],
         }
         if file_type == "T030":
             mapping = {
                 "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
-                "KOMOK": ["komok", "科目修改", "修改码"],
-                "BWMOD": ["bwmod", "评估分组", "评估分组代码", "valuation grouping code", "valuationgroupingcode"],
+                "KOMOK": ["komok", "科目修改", "修改码", "AM"],
+                "BWMOD": ["bwmod", "评估分组", "评估分组代码", "代码", "valuation grouping code", "valuationgroupingcode"],
                 "BKLAS": ["bklas", "valcl", "评估类", "评估类字段", "valuation class", "valuationclass"],
                 "KONTS": ["konts", "借方科目", "总帐科目", "总账科目"],
                 "KONTH": ["konth", "贷方科目", "总帐科目", "总账科目"],
             }
         elif file_type == "TrialBalance":
             mapping = {
-                "COMPANY_CODE": ["company_code", "bukrs", "公司代码", "公司编码", "Company Code"],
+                "COMPANY_CODE": ["company_code", "bukrs", "公司代码", "公司编码", "公司", "Company Code"],
                 "PERIOD": ["period", "monat", "会计期间", "会计期", "年月", "月份"],
                 "SAKNR": ["saknr", "科目编码", "科目代码", "总账科目", "总帐科目", "G/L Account", "科目"],
                 "TXT50": ["txt50", "科目名称", "科目描述", "短文本", "总分类帐名称"],
