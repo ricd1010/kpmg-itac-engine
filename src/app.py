@@ -344,13 +344,37 @@ if not os.path.exists(SESSION_DATA_DIR):
     os.makedirs(SESSION_DATA_DIR, exist_ok=True)
 
 def upload_signature(*files):
-    return tuple((f.name, getattr(f, "size", None)) for f in files if f is not None)
+    flat_files = []
+    for item in files:
+        if item is None:
+            continue
+        if isinstance(item, (list, tuple)):
+            flat_files.extend(f for f in item if f is not None)
+        else:
+            flat_files.append(item)
+    return tuple((f.name, getattr(f, "size", None)) for f in flat_files)
 
 def validate_upload_to_session(uploaded_file, file_type):
     is_valid, msg, df = DataValidator.validate_file(uploaded_file, file_type)
     if is_valid:
         df.to_csv(os.path.join(SESSION_DATA_DIR, f"{file_type}.csv"), index=False, encoding="utf-8-sig")
     return is_valid, msg
+
+def validate_uploads_to_session(uploaded_files, file_type):
+    files = [f for f in (uploaded_files or []) if f is not None]
+    if not files:
+        return False, "未选择文件。", 0
+
+    frames = []
+    for uploaded_file in files:
+        is_valid, msg, df = DataValidator.validate_file(uploaded_file, file_type)
+        if not is_valid:
+            return False, f"{uploaded_file.name}: {msg}", 0
+        frames.append(df)
+
+    combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    combined.to_csv(os.path.join(SESSION_DATA_DIR, f"{file_type}.csv"), index=False, encoding="utf-8-sig")
+    return True, "验证通过", len(files)
 
 def load_session_table(file_type):
     path = os.path.join(SESSION_DATA_DIR, f"{file_type}.csv")
@@ -1093,17 +1117,17 @@ elif st.session_state.current_step == 3:
         tb_label = "可选：S/4 编辑版科余表 / ACDOCA 归集核对表（用于补充金额排序和科目名称）"
     else:
         tb_label = "可选：余额表（用于补充金额排序和部分科目名称）"
-    tb_file = st.file_uploader(tb_label, type=["csv", "xlsx", "xls"])
-    if tb_file:
-        tb_signature = upload_signature(tb_file)
+    tb_files = st.file_uploader(tb_label, type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+    if tb_files:
+        tb_signature = upload_signature(tb_files)
         if tb_signature != st.session_state.trial_balance_signature:
             with st.spinner("正在校验余额表并刷新场景金额..."):
-                is_v, msg = validate_upload_to_session(tb_file, "TrialBalance")
+                is_v, msg, file_count = validate_uploads_to_session(tb_files, "TrialBalance")
                 if is_v:
                     st.session_state.trial_balance_ready = True
                     st.session_state.trial_balance_signature = tb_signature
                     refresh_scenario_preview()
-                    st.success("余额表已加载，场景金额和可补充的科目名称已刷新。")
+                    st.success(f"已加载并合并 {file_count} 张余额表，场景金额和可补充的科目名称已刷新。")
                 else:
                     st.error(f"❌ TrialBalance 失败: {msg}")
     elif st.session_state.trial_balance_ready:
