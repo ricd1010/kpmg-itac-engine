@@ -10,7 +10,8 @@ class DataValidator:
         "SKAT": ["SAKNR", "TXT50"],
         "T030": ["KONTS", "KONTH"], 
         "TrialBalance": ["SAKNR", "DMBTR_DEBIT"],
-        "Samples": ["DOC_NUM", "SAKNR", "AMOUNT"]
+        "Samples": ["DOC_NUM", "SAKNR", "AMOUNT"],
+        "T001K": ["BWKEY"]
     }
 
     @staticmethod
@@ -120,7 +121,7 @@ class DataValidator:
 
             for i in range(df.shape[1]):
                 col_name = df.columns[i]
-                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC"]):
+                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC", "BWKEY", "BUKRS", "BWMOD", "MATNR"]):
                     df.iloc[:, i] = df.iloc[:, i].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
                 if any(k in col_name for k in ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]):
                     s = df.iloc[:, i].astype(str).str.replace(r'[^0-9.\-]', '', regex=True)
@@ -139,6 +140,7 @@ class DataValidator:
             "评估分组代码": 15, "科目修改": 15, "trs": 15, "valcl": 15,
             "已结转余额": 15, "前一期间的余额": 15, "在制表期间的借方余额": 15,
             "本月借方发生额": 15, "本年借方累计": 15, "本年贷方累计": 15, "会计期间": 15, "公司代码": 15,
+            "bwkey": 20, "bukrs": 20, "bwmod": 20, "评估范围": 20, "评估分组": 20,
             "txt50": 10, "短文本": 10, "科目名称": 10, "科目描述": 10, "科目编码": 10, "帐目表": 10
         }
         # 严禁词：只针对纯粹的 metadata 标题
@@ -240,7 +242,8 @@ class DataValidator:
             "SHKZG": ["shkzg", "借/贷标识", "S/H"],
             "SCENARIO": ["scenario", "audit_scenario", "审计场景", "场景", "目标场景", "测试场景"],
             "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
-            "KOMOK": ["komok", "科目修改", "修改码"]
+            "KOMOK": ["komok", "科目修改", "修改码"],
+            "MATNR": ["matnr", "物料", "物料号", "物料编码", "Material"],
         }
         if file_type == "T030":
             mapping = {
@@ -263,6 +266,12 @@ class DataValidator:
                     "dmbtr_credit", "本月贷方发生额", "贷方发生额", "贷方金额",
                     "本年贷方累计", "贷方累计", "累计贷方", "报表期间的贷方余额"
                 ],
+            }
+        elif file_type == "T001K":
+            mapping = {
+                "BWKEY": ["bwkey", "评估范围", "评估范围代码", "valuation area", "valuationarea"],
+                "BUKRS": ["bukrs", "公司代码", "公司编码", "company code", "companycode"],
+                "BWMOD": ["bwmod", "评估分组", "评估分组代码", "valuation grouping code", "valuationgroupingcode"],
             }
         else:
             mapping = common_mapping

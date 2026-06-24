@@ -4,6 +4,7 @@ import os
 import datetime
 import re
 import base64
+import io
 import time
 import uuid
 import html
@@ -14,6 +15,7 @@ from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
 from data_validator import DataValidator
 from scenario_summary import build_scenario_account_totals
+from sampling_scenario import build_sampling_scenario_table
 from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
 from dotenv import load_dotenv
 
@@ -249,6 +251,9 @@ if "base_files_ready" not in st.session_state: st.session_state.base_files_ready
 if "base_file_signature" not in st.session_state: st.session_state.base_file_signature = None
 if "trial_balance_ready" not in st.session_state: st.session_state.trial_balance_ready = False
 if "trial_balance_signature" not in st.session_state: st.session_state.trial_balance_signature = None
+if "t001k_ready" not in st.session_state: st.session_state.t001k_ready = False
+if "t001k_signature" not in st.session_state: st.session_state.t001k_signature = None
+if "mm03_image_names" not in st.session_state: st.session_state.mm03_image_names = []
 if "scenario_preview" not in st.session_state: st.session_state.scenario_preview = []
 if "scenario_preview_schema_version" not in st.session_state: st.session_state.scenario_preview_schema_version = None
 if "scroll_to_top" not in st.session_state: st.session_state.scroll_to_top = False
@@ -346,6 +351,32 @@ def validate_upload_to_session(uploaded_file, file_type):
     if is_valid:
         df.to_csv(os.path.join(SESSION_DATA_DIR, f"{file_type}.csv"), index=False, encoding="utf-8-sig")
     return is_valid, msg
+
+def load_session_table(file_type):
+    path = os.path.join(SESSION_DATA_DIR, f"{file_type}.csv")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, dtype=str, keep_default_na=False)
+    except Exception:
+        return pd.DataFrame()
+
+def dataframe_to_excel_bytes(df, sheet_name="Sheet1"):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    return output.getvalue()
+
+def save_uploaded_images(files, folder_name):
+    target_dir = os.path.join(SESSION_DATA_DIR, folder_name)
+    os.makedirs(target_dir, exist_ok=True)
+    saved_names = []
+    for uploaded in files or []:
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", uploaded.name)
+        with open(os.path.join(target_dir, safe_name), "wb") as f:
+            f.write(uploaded.getvalue())
+        saved_names.append(safe_name)
+    return saved_names
 
 def refresh_scenario_preview():
     ranked = Core1Orchestrator(SESSION_DATA_DIR).run()
@@ -948,6 +979,9 @@ if st.session_state.results:
             st.session_state.base_file_signature = None
             st.session_state.trial_balance_ready = False
             st.session_state.trial_balance_signature = None
+            st.session_state.t001k_ready = False
+            st.session_state.t001k_signature = None
+            st.session_state.mm03_image_names = []
             st.session_state.scenario_preview = []
             st.session_state.scenario_preview_schema_version = None
             st.rerun()
@@ -1065,6 +1099,57 @@ elif st.session_state.current_step == 3:
     ensure_scenario_preview_current()
     with st.expander("查看当前场景匹配结果", expanded=not st.session_state.trial_balance_ready):
         render_scenario_preview(st.session_state.scenario_preview, show_amount=st.session_state.trial_balance_ready)
+
+    st.write("---")
+    st.markdown("**补充主数据并导出抽样场景表**")
+    st.caption("可选：上传 T001K 补充公司代码、评估范围与评估分组；上传 MM03 截图作为后续物料主数据核对资料。完成后可先导出抽样场景表，再上传样本。")
+    master_cols = st.columns(2)
+    with master_cols[0]:
+        t001k_file = st.file_uploader("T001K 评估范围/公司代码表", type=["csv", "xlsx", "xls"])
+    with master_cols[1]:
+        mm03_images = st.file_uploader("MM03 物料主数据截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+
+    if t001k_file:
+        t001k_signature = upload_signature(t001k_file)
+        if t001k_signature != st.session_state.t001k_signature:
+            is_v, msg = validate_upload_to_session(t001k_file, "T001K")
+            if is_v:
+                st.session_state.t001k_ready = True
+                st.session_state.t001k_signature = t001k_signature
+                st.success("T001K 已加载，抽样场景表将补充评估范围与评估分组。")
+            else:
+                st.error(f"❌ T001K 失败: {msg}")
+    elif st.session_state.t001k_ready:
+        st.success("已加载本会话的 T001K。")
+
+    if mm03_images:
+        names = save_uploaded_images(mm03_images, "mm03")
+        st.session_state.mm03_image_names = sorted(set(st.session_state.mm03_image_names).union(names))
+    if st.session_state.mm03_image_names:
+        st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，将在抽样场景表中标记为已补充。")
+
+    t001k_df = load_session_table("T001K")
+    sampling_df = build_sampling_scenario_table(
+        st.session_state.scenario_preview,
+        t001k_df=t001k_df,
+        mm03_image_names=st.session_state.mm03_image_names,
+    )
+    if sampling_df.empty:
+        st.info("当前暂无可导出的抽样场景表，请先完成 T030/SKAT 场景匹配。")
+    else:
+        export_cols = st.columns([1.2, 2.8])
+        with export_cols[0]:
+            st.download_button(
+                "📥 导出抽样场景表",
+                data=dataframe_to_excel_bytes(sampling_df, "抽样场景表"),
+                file_name="Sampling_Scenario_Table.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                width="stretch",
+            )
+        with export_cols[1]:
+            st.caption("抽样场景表包含公司代码、评估范围、评估分组、审计场景、科目、金额、额外科目标记和 MM03 补充状态。")
+        with st.expander("预览抽样场景表", expanded=False):
+            st.dataframe(sampling_df.head(50), width="stretch")
 
     st.write("---")
     sample_scenario_options = [AUTO_SCENARIO_LABEL] + scenario_names_from_preview()
