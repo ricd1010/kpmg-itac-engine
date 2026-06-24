@@ -246,13 +246,19 @@ class Core1Orchestrator:
 
         # 3. 如果提供科目余额表，按公司代码取各自最后期间，汇总本月借方发生额；同时用余额表 TXT50 补足 SKAT 缺失描述
         tb_amounts = {}
+        tb_debit_amounts = {}
+        tb_credit_amounts = {}
+        tb_combined_amounts = {}
         tb_amounts_by_company = {}
+        has_directional_amounts = False
         if os.path.exists(self.tb_path):
             try:
                 df_tb = pd.read_csv(self.tb_path, dtype=str)
                 df_tb.columns = [str(c).strip().upper() for c in df_tb.columns]
                 
                 d_col = 'DMBTR_DEBIT' if 'DMBTR_DEBIT' in df_tb.columns else next((c for c in df_tb.columns if 'DEBIT' in c or '借方' in c), None)
+                c_col = 'DMBTR_CREDIT' if 'DMBTR_CREDIT' in df_tb.columns else next((c for c in df_tb.columns if 'CREDIT' in c or '贷方' in c), None)
+                has_directional_amounts = bool(c_col)
                 s_col = 'SAKNR' if 'SAKNR' in df_tb.columns else next((c for c in df_tb.columns if '科目' in c), None)
                 t_col = 'TXT50' if 'TXT50' in df_tb.columns else next((c for c in df_tb.columns if '描述' in c or '名称' in c), None)
                 company_col = next((c for c in df_tb.columns if c == 'COMPANY_CODE' or '公司代码' in c or 'BUKRS' in c), None)
@@ -286,11 +292,24 @@ class Core1Orchestrator:
                         saknr = self._clean_acc(row[s_col])
                         if not saknr: continue
                         
-                        val = self._parse_amt(row[d_col]) if d_col else 0.0
-                        tb_amounts[saknr] = tb_amounts.get(saknr, 0) + val
+                        debit_val = self._parse_amt(row[d_col]) if d_col else 0.0
+                        credit_val = abs(self._parse_amt(row[c_col])) if c_col else 0.0
+                        combined_val = debit_val + credit_val
+
+                        tb_debit_amounts[saknr] = tb_debit_amounts.get(saknr, 0) + debit_val
+                        tb_credit_amounts[saknr] = tb_credit_amounts.get(saknr, 0) + credit_val
+                        tb_combined_amounts[saknr] = tb_combined_amounts.get(saknr, 0) + combined_val
+                        tb_amounts[saknr] = tb_debit_amounts[saknr]
                         company_code = self._company_label(row[company_col]) if company_col else "未指定公司"
-                        tb_amounts_by_company.setdefault(company_code, {})
-                        tb_amounts_by_company[company_code][saknr] = tb_amounts_by_company[company_code].get(saknr, 0) + val
+                        company_amounts = tb_amounts_by_company.setdefault(company_code, {})
+                        account_amounts = company_amounts.setdefault(saknr, {
+                            "debit_value": 0.0,
+                            "credit_value": 0.0,
+                            "combined_value": 0.0,
+                        })
+                        account_amounts["debit_value"] += debit_val
+                        account_amounts["credit_value"] += credit_val
+                        account_amounts["combined_value"] += combined_val
             except Exception as e:
                 print(f"Core 1 - Trial Balance 汇总失败: {e}")
 
@@ -303,22 +322,41 @@ class Core1Orchestrator:
             account_details = self._build_account_details(scenario_account_details.get(name, {}), acc_descs)
             company_values = []
             for company_code, amount_map in tb_amounts_by_company.items():
-                company_total = sum(amount_map.get(acc, 0) for acc in amount_acc_list)
-                if company_total:
+                company_debit_total = sum(float(amount_map.get(acc, {}).get("debit_value", 0) or 0) for acc in amount_acc_list)
+                company_credit_total = sum(float(amount_map.get(acc, {}).get("credit_value", 0) or 0) for acc in amount_acc_list)
+                company_combined_total = company_debit_total + company_credit_total
+                if company_combined_total:
                     account_values = []
                     for acc in amount_acc_list:
-                        account_total = amount_map.get(acc, 0)
-                        if account_total:
-                            account_values.append({
+                        account_amounts = amount_map.get(acc, {})
+                        account_debit_total = float(account_amounts.get("debit_value", 0) or 0)
+                        account_credit_total = float(account_amounts.get("credit_value", 0) or 0)
+                        account_combined_total = account_debit_total + account_credit_total
+                        if account_combined_total:
+                            account_entry = {
                                 "account": acc,
                                 "description": acc_descs.get(acc, "未知科目"),
-                                "total_value": account_total
-                            })
-                    company_values.append({
+                                "total_value": account_debit_total,
+                            }
+                            if has_directional_amounts:
+                                account_entry.update({
+                                    "debit_value": account_debit_total,
+                                    "credit_value": account_credit_total,
+                                    "combined_value": account_combined_total,
+                                })
+                            account_values.append(account_entry)
+                    company_entry = {
                         "company_code": company_code,
-                        "total_value": company_total,
+                        "total_value": company_debit_total,
                         "account_values": account_values
-                    })
+                    }
+                    if has_directional_amounts:
+                        company_entry.update({
+                            "debit_value": company_debit_total,
+                            "credit_value": company_credit_total,
+                            "combined_value": company_combined_total,
+                        })
+                    company_values.append(company_entry)
             company_values.sort(key=lambda x: x["total_value"], reverse=True)
             baseline_company_code, baseline_account_codes, extra_account_count = self._apply_baseline_flags(company_values)
 
@@ -329,6 +367,9 @@ class Core1Orchestrator:
                 "raw_accounts": acc_list,
                 "amount_accounts": amount_acc_list,
                 "total_value": sum(tb_amounts.get(acc, 0) for acc in amount_acc_list),
+                "debit_value": sum(tb_debit_amounts.get(acc, 0) for acc in amount_acc_list),
+                "credit_value": sum(tb_credit_amounts.get(acc, 0) for acc in amount_acc_list),
+                "combined_value": sum(tb_combined_amounts.get(acc, 0) for acc in amount_acc_list),
                 "company_values": company_values,
                 "baseline_company_code": baseline_company_code,
                 "baseline_account_codes": baseline_account_codes,

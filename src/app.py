@@ -14,7 +14,7 @@ from core1_main import Core1Orchestrator
 from core2_main import Core2Orchestrator
 from report_generator import ReportGenerator
 from data_validator import DataValidator
-from scenario_summary import build_scenario_account_totals
+from scenario_summary import amount_for_direction, build_scenario_account_totals
 from sampling_scenario import build_sampling_scenario_table
 from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
 from dotenv import load_dotenv
@@ -27,7 +27,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 11
+SCENARIO_PREVIEW_SCHEMA_VERSION = 12
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -526,34 +526,17 @@ def render_scenario_preview(ranked, show_amount=False):
             horizontal=True,
             label_visibility="collapsed",
             key="scenario_account_direction_filter",
-            help="按 T030 配置中的借贷方向筛选场景科目汇总与公司明细。",
+            help="按余额表实际借方/贷方发生额筛选场景科目汇总与公司明细。",
         )
 
-        def detail_lookup_for(result):
-            return {
-                str(detail.get("account", "")).strip(): detail
-                for detail in result.get("account_details", []) or []
-                if detail.get("account")
-            }
-
-        def account_matches_direction(account_code, detail_lookup):
-            if direction_filter == "全部":
-                return True
-            direction = str(detail_lookup.get(str(account_code).strip(), {}).get("direction", "")).strip()
-            if direction_filter == "借方":
-                return direction in {"借方", "借贷双方"}
-            if direction_filter == "贷方":
-                return direction in {"贷方", "借贷双方"}
-            return True
-
-        def account_chip(account):
+        def account_chip(account, amount_value):
             chip_class = "account-detail-chip account-extra-chip" if account.get("is_extra") else "account-detail-chip"
             extra_badge = "<span class='extra-badge'>额外</span>" if account.get("is_extra") else ""
             return (
                 f"<span class='{chip_class}'>"
                 f"<span class='account-code'>{html.escape(str(account.get('account', '')))}</span>"
                 f"<span class='account-desc'>{html.escape(str(account.get('description', '未知科目')))}</span>"
-                f"<span class='account-amount'>{float(account.get('total_value', 0) or 0):,.2f}</span>"
+                f"<span class='account-amount'>{float(amount_value or 0):,.2f}</span>"
                 f"{extra_badge}"
                 "</span>"
             )
@@ -606,21 +589,22 @@ def render_scenario_preview(ranked, show_amount=False):
         for idx, company_code in enumerate(company_codes):
             scenario_rows = []
             for result in ranked:
-                detail_lookup = detail_lookup_for(result)
                 company_item = next(
                     (item for item in result.get("company_values", []) if str(item.get("company_code", "未指定公司")) == company_code),
                     None
                 )
                 all_account_values = company_item.get("account_values", []) if company_item else []
                 account_values = [
-                    account for account in all_account_values
-                    if account_matches_direction(account.get("account", ""), detail_lookup)
+                    (account, amount_value)
+                    for account in all_account_values
+                    for amount_value in [amount_for_direction(account, direction_filter)]
+                    if amount_value
                 ]
-                scenario_amount = sum(float(account.get("total_value", 0) or 0) for account in account_values)
+                scenario_amount = sum(float(amount_value or 0) for _, amount_value in account_values)
                 if account_values:
                     account_html = "".join(
-                        account_chip(account)
-                        for account in account_values
+                        account_chip(account, amount_value)
+                        for account, amount_value in account_values
                     )
                 else:
                     account_html = "<span class='empty-cell'>该公司最后期间未命中此场景科目</span>"

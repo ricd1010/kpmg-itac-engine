@@ -95,6 +95,9 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
     assert purchase_receipt["raw_accounts"] == ["1403000000", "2202040000"]
     assert purchase_receipt["amount_accounts"] == ["2202040000"]
     assert purchase_receipt["total_value"] == 12.0
+    assert purchase_receipt["debit_value"] == 12.0
+    assert purchase_receipt["credit_value"] == 1200.0
+    assert purchase_receipt["combined_value"] == 1212.0
     assert purchase_receipt["baseline_company_code"] == "4010"
     assert purchase_receipt["baseline_account_codes"] == ["2202040000"]
     assert purchase_receipt["extra_account_count"] == 0
@@ -102,11 +105,17 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
         {
             "company_code": "4000",
             "total_value": 7.0,
+            "debit_value": 7.0,
+            "credit_value": 700.0,
+            "combined_value": 707.0,
             "account_values": [
                 {
                     "account": "2202040000",
                     "description": "应付账款-GR/IR",
                     "total_value": 7.0,
+                    "debit_value": 7.0,
+                    "credit_value": 700.0,
+                    "combined_value": 707.0,
                     "is_extra": False,
                     "baseline_company_code": "4010",
                 },
@@ -115,11 +124,17 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
         {
             "company_code": "4010",
             "total_value": 5.0,
+            "debit_value": 5.0,
+            "credit_value": 500.0,
+            "combined_value": 505.0,
             "account_values": [
                 {
                     "account": "2202040000",
                     "description": "应付账款-GR/IR",
                     "total_value": 5.0,
+                    "debit_value": 5.0,
+                    "credit_value": 500.0,
+                    "combined_value": 505.0,
                     "is_extra": False,
                     "baseline_company_code": "4010",
                 },

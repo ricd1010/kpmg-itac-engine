@@ -4,7 +4,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from scenario_summary import build_scenario_account_totals
+from scenario_summary import amount_for_direction, build_scenario_account_totals
+
+
+def test_amount_for_direction_uses_balance_amount_fields():
+    account = {
+        "total_value": 10.0,
+        "debit_value": 10.0,
+        "credit_value": 3.0,
+        "combined_value": 13.0,
+    }
+
+    assert amount_for_direction(account, "全部") == 13.0
+    assert amount_for_direction(account, "借方") == 10.0
+    assert amount_for_direction(account, "贷方") == 3.0
 
 
 def test_build_scenario_account_totals_sums_same_account_across_companies():
@@ -65,7 +78,7 @@ def test_build_scenario_account_totals_ignores_empty_company_values():
     assert build_scenario_account_totals(ranked) == []
 
 
-def test_build_scenario_account_totals_filters_by_direction():
+def test_build_scenario_account_totals_filters_by_balance_direction_amounts():
     ranked = [{
         "name": "采购收货",
         "account_details": [
@@ -76,21 +89,50 @@ def test_build_scenario_account_totals_filters_by_direction():
         "company_values": [{
             "company_code": "4000",
             "account_values": [
-                {"account": "1403000000", "description": "原材料", "total_value": 10.0},
-                {"account": "2202040000", "description": "应付账款-GR/IR", "total_value": 20.0},
-                {"account": "9999999999", "description": "双边科目", "total_value": 30.0},
+                {
+                    "account": "1403000000",
+                    "description": "原材料",
+                    "total_value": 10.0,
+                    "debit_value": 10.0,
+                    "credit_value": 1.0,
+                    "combined_value": 11.0,
+                },
+                {
+                    "account": "2202040000",
+                    "description": "应付账款-GR/IR",
+                    "total_value": 20.0,
+                    "debit_value": 20.0,
+                    "credit_value": 7.0,
+                    "combined_value": 27.0,
+                },
+                {
+                    "account": "9999999999",
+                    "description": "双边科目",
+                    "total_value": 30.0,
+                    "debit_value": 30.0,
+                    "credit_value": 2.0,
+                    "combined_value": 32.0,
+                },
             ],
         }],
     }]
 
+    all_rows = build_scenario_account_totals(ranked, direction_filter="全部")
     debit_rows = build_scenario_account_totals(ranked, direction_filter="借方")
     credit_rows = build_scenario_account_totals(ranked, direction_filter="贷方")
 
-    assert {row["account"] for row in debit_rows} == {"1403000000", "9999999999"}
-    assert {row["account"] for row in credit_rows} == {"2202040000", "9999999999"}
+    assert {row["account"] for row in all_rows} == {"1403000000", "2202040000", "9999999999"}
+    assert {row["account"] for row in debit_rows} == {"1403000000", "2202040000", "9999999999"}
+    assert {row["account"] for row in credit_rows} == {"1403000000", "2202040000", "9999999999"}
+
+    all_gr_ir = next(row for row in all_rows if row["account"] == "2202040000")
     debit_raw_material = next(row for row in debit_rows if row["account"] == "1403000000")
     credit_gr_ir = next(row for row in credit_rows if row["account"] == "2202040000")
-    assert debit_raw_material["scenario_total_value"] == 40.0
-    assert round(debit_raw_material["amount_share_pct"], 2) == 25.0
-    assert credit_gr_ir["scenario_total_value"] == 50.0
-    assert round(credit_gr_ir["amount_share_pct"], 2) == 40.0
+
+    assert all_gr_ir["total_value"] == 27.0
+    assert all_gr_ir["scenario_total_value"] == 70.0
+    assert round(all_gr_ir["amount_share_pct"], 2) == 38.57
+    assert debit_raw_material["scenario_total_value"] == 60.0
+    assert round(debit_raw_material["amount_share_pct"], 2) == 16.67
+    assert credit_gr_ir["scenario_total_value"] == 10.0
+    assert round(credit_gr_ir["amount_share_pct"], 2) == 70.0

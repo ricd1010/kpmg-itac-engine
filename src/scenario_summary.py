@@ -1,13 +1,13 @@
-def _matches_direction(detail, direction_filter):
-    if not direction_filter or direction_filter == "全部":
-        return True
+def amount_for_direction(account, direction_filter="全部"):
+    debit_value = float(account.get("debit_value", account.get("total_value", 0)) or 0)
+    credit_value = float(account.get("credit_value", 0) or 0)
+    combined_value = float(account.get("combined_value", debit_value + credit_value) or 0)
 
-    direction = str((detail or {}).get("direction", "")).strip()
     if direction_filter == "借方":
-        return direction in {"借方", "借贷双方"}
+        return debit_value
     if direction_filter == "贷方":
-        return direction in {"贷方", "借贷双方"}
-    return True
+        return credit_value
+    return combined_value
 
 
 def build_scenario_account_totals(ranked, direction_filter="全部"):
@@ -25,9 +25,11 @@ def build_scenario_account_totals(ranked, direction_filter="全部"):
                 account_code = str(account.get("account", "")).strip()
                 if not account_code:
                     continue
-                detail = detail_lookup.get(account_code, {})
-                if not _matches_direction(detail, direction_filter):
+                amount_value = amount_for_direction(account, direction_filter)
+                if not amount_value:
                     continue
+
+                detail = detail_lookup.get(account_code, {})
                 entry = by_account.setdefault(account_code, {
                     "scenario": scenario.get("name", ""),
                     "account": account_code,
@@ -36,7 +38,7 @@ def build_scenario_account_totals(ranked, direction_filter="全部"):
                     "company_codes": set(),
                     "extra_company_count": 0,
                 })
-                entry["total_value"] += float(account.get("total_value", 0) or 0)
+                entry["total_value"] += amount_value
                 entry["company_codes"].add(company_code)
                 if account.get("is_extra"):
                     entry["extra_company_count"] += 1
