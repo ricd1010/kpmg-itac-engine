@@ -27,7 +27,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 10
+SCENARIO_PREVIEW_SCHEMA_VERSION = 11
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -495,33 +495,14 @@ def render_scenario_preview(ranked, show_amount=False):
     total_accounts = int(preview_df["已匹配名称"].sum() + preview_df["未匹配名称"].sum())
     matched_accounts = int(preview_df["已匹配名称"].sum())
 
-    def detail_lookup_for(result):
-        return {
-            str(detail.get("account", "")).strip(): detail
-            for detail in result.get("account_details", []) or []
-            if detail.get("account")
-        }
-
-    def meta_text(detail):
-        parts = []
-        for label, key in (("借贷", "direction"), ("TRS", "ktosl"), ("修改", "komok"), ("评估分组", "bwmod"), ("评估类", "bklas")):
-            value = str(detail.get(key, "") or "").strip()
-            if value:
-                parts.append(f"{label}:{value}")
-        return " | ".join(parts)
-
     if show_amount:
-        def account_chip(account, detail_lookup):
+        def account_chip(account):
             chip_class = "account-detail-chip account-extra-chip" if account.get("is_extra") else "account-detail-chip"
             extra_badge = "<span class='extra-badge'>额外</span>" if account.get("is_extra") else ""
-            detail = detail_lookup.get(str(account.get("account", "")).strip(), {})
-            meta = meta_text(detail)
-            meta_html = f"<span class='account-meta'>{html.escape(meta)}</span>" if meta else ""
             return (
                 f"<span class='{chip_class}'>"
                 f"<span class='account-code'>{html.escape(str(account.get('account', '')))}</span>"
                 f"<span class='account-desc'>{html.escape(str(account.get('description', '未知科目')))}</span>"
-                f"{meta_html}"
                 f"<span class='account-amount'>{float(account.get('total_value', 0) or 0):,.2f}</span>"
                 f"{extra_badge}"
                 "</span>"
@@ -553,9 +534,6 @@ def render_scenario_preview(ranked, show_amount=False):
                 f"<td class='scenario-name'>{html.escape(str(row.get('scenario', '')))}</td>"
                 f"<td><span class='summary-account-code'>{html.escape(str(row.get('account', '')))}</span></td>"
                 f"<td>{html.escape(str(row.get('description', '未知科目')))}</td>"
-                f"<td>{html.escape(str(row.get('direction', '')))}</td>"
-                f"<td>{html.escape(str(row.get('bwmod', '')))}</td>"
-                f"<td>{html.escape(str(row.get('bklas', '')))}</td>"
                 f"<td class='amount'>{float(row.get('total_value', 0) or 0):,.2f}</td>"
                 f"<td class='amount-share'>{float(row.get('amount_share_pct', 0) or 0):.2f}%</td>"
                 f"<td class='summary-company-count' title='{html.escape(company_codes_text)}'>{int(row.get('company_count', 0) or 0)}</td>"
@@ -568,7 +546,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 "<section class='scenario-total-summary'>"
                 "<div class='summary-title'>场景科目总金额汇总</div>"
                 "<table class='scenario-total-table'>"
-                "<thead><tr><th>审计场景</th><th>科目编码</th><th>科目描述</th><th>借贷方</th><th>评估分组</th><th>评估类</th><th class='amount'>总金额</th><th class='amount-share'>占比</th><th>命中公司数</th><th>提示</th></tr></thead>"
+                "<thead><tr><th>审计场景</th><th>科目编码</th><th>科目描述</th><th class='amount'>总金额</th><th class='amount-share'>占比</th><th>命中公司数</th><th>提示</th></tr></thead>"
                 f"<tbody>{''.join(summary_rows)}</tbody>"
                 "</table>"
                 "</section>"
@@ -578,7 +556,6 @@ def render_scenario_preview(ranked, show_amount=False):
         for idx, company_code in enumerate(company_codes):
             scenario_rows = []
             for result in ranked:
-                detail_lookup = detail_lookup_for(result)
                 company_item = next(
                     (item for item in result.get("company_values", []) if str(item.get("company_code", "未指定公司")) == company_code),
                     None
@@ -587,7 +564,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 account_values = company_item.get("account_values", []) if company_item else []
                 if account_values:
                     account_html = "".join(
-                        account_chip(account, detail_lookup)
+                        account_chip(account)
                         for account in account_values
                     )
                 else:
@@ -610,7 +587,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 f"<span>公司代码 {html.escape(company_code)}</span>"
                 "</summary>"
                 "<table class='company-scenario-table'>"
-                "<thead><tr><th>审计场景</th><th class='amount'>场景金额</th><th>金额归集科目 / 科目描述 / 借贷方 / 评估字段 / 金额</th></tr></thead>"
+                "<thead><tr><th>审计场景</th><th class='amount'>场景金额</th><th>金额归集科目 / 科目描述 / 金额</th></tr></thead>"
                 f"<tbody>{''.join(scenario_rows)}</tbody>"
                 "</table>"
                 "</details>"
@@ -772,10 +749,6 @@ def render_scenario_preview(ranked, show_amount=False):
             .account-detail-chip .account-desc {{
                 overflow-wrap: anywhere;
             }}
-            .account-detail-chip .account-meta {{
-                color: #64748b;
-                font-size: 12px;
-            }}
             .account-detail-chip .account-amount {{
                 color: #006b6b;
                 font-weight: 700;
@@ -843,10 +816,6 @@ def render_scenario_preview(ranked, show_amount=False):
                 "<span class='account-chip'>"
                 f"<span class='account-code'>{html.escape(str(detail.get('account', '')))}</span>"
                 f" ({html.escape(str(detail.get('description', '未知科目')))})"
-                + (
-                    f"<span class='account-chip-meta'>{html.escape(meta_text(detail))}</span>"
-                    if meta_text(detail) else ""
-                )
                 + "</span>"
                 for detail in detail_items
             )
@@ -933,12 +902,6 @@ def render_scenario_preview(ranked, show_amount=False):
         .scenario-preview-table .account-code {{
             color: #00338d;
             font-weight: 700;
-        }}
-        .scenario-preview-table .account-chip-meta {{
-            display: block;
-            color: #64748b;
-            font-size: 12px;
-            line-height: 1.5;
         }}
         .scenario-preview-table .empty-cell {{
             color: #8a94a6;

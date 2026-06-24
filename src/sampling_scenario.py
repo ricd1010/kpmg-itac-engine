@@ -47,18 +47,6 @@ def _build_t001k_lookup(t001k_df):
     return lookup
 
 
-def _build_detail_lookup(scenario):
-    return {
-        _clean_code(detail.get("account")): detail
-        for detail in scenario.get("account_details", [])
-        if _clean_code(detail.get("account"))
-    }
-
-
-def _detail_for_account(detail_lookup, account_code):
-    return detail_lookup.get(_clean_code(account_code), {})
-
-
 def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_names=None):
     rows = []
     t001k_lookup = _build_t001k_lookup(t001k_df)
@@ -71,7 +59,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
         scenario_name = str(scenario.get("name", "")).strip()
         baseline_company = str(scenario.get("baseline_company_code") or "").strip()
         company_values = scenario.get("company_values") or []
-        detail_lookup = _build_detail_lookup(scenario)
 
         if company_values:
             for company_item in company_values:
@@ -90,11 +77,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                         "是否额外科目": "",
                         "科目编码": "",
                         "科目描述": "该公司最后期间未命中此场景科目",
-                        "配置借贷方": "",
-                        "事务码": "",
-                        "科目修改": "",
-                        "T030评估分组": "",
-                        "评估类": "",
                         "科目金额": 0.0,
                         "场景金额": scenario_amount,
                         "抽样建议": "如该场景为测试范围，请补充对应会计凭证或说明未命中原因",
@@ -104,7 +86,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
 
                 for account in account_values:
                     is_extra = bool(account.get("is_extra"))
-                    detail = _detail_for_account(detail_lookup, account.get("account"))
                     rows.append({
                         "公司代码": company_code,
                         "评估范围": t001k_info.get("valuation_area", ""),
@@ -114,11 +95,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                         "是否额外科目": "是" if is_extra else "否",
                         "科目编码": _clean_code(account.get("account")),
                         "科目描述": str(account.get("description") or ""),
-                        "配置借贷方": detail.get("direction", ""),
-                        "事务码": detail.get("ktosl", ""),
-                        "科目修改": detail.get("komok", ""),
-                        "T030评估分组": detail.get("bwmod", ""),
-                        "评估类": detail.get("bklas", ""),
                         "科目金额": float(account.get("total_value", 0) or 0),
                         "场景金额": scenario_amount,
                         "抽样建议": "优先抽样：相比基准公司多出的实际命中科目" if is_extra else "按场景金额和样本覆盖情况抽样",
@@ -137,11 +113,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "是否额外科目": "",
                 "科目编码": "",
                 "科目描述": "未识别到关联科目",
-                "配置借贷方": "",
-                "事务码": "",
-                "科目修改": "",
-                "T030评估分组": "",
-                "评估类": "",
                 "科目金额": 0.0,
                 "场景金额": float(scenario.get("total_value", 0) or 0),
                 "抽样建议": "先完成 T030/SKAT 匹配，再上传余额表生成公司维度抽样范围",
@@ -151,7 +122,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
 
         for account_label in accounts:
             account_code, description = _parse_account_label(account_label)
-            detail = _detail_for_account(detail_lookup, account_code)
             rows.append({
                 "公司代码": "",
                 "评估范围": "",
@@ -160,12 +130,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "基准公司": "",
                 "是否额外科目": "",
                 "科目编码": account_code,
-                "科目描述": detail.get("description") or description,
-                "配置借贷方": detail.get("direction", ""),
-                "事务码": detail.get("ktosl", ""),
-                "科目修改": detail.get("komok", ""),
-                "T030评估分组": detail.get("bwmod", ""),
-                "评估类": detail.get("bklas", ""),
+                "科目描述": description,
                 "科目金额": 0.0,
                 "场景金额": float(scenario.get("total_value", 0) or 0),
                 "抽样建议": "上传余额表后可生成公司维度金额和优先级",

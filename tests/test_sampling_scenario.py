@@ -49,12 +49,12 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
     assert row["审计场景"] == "完工入库"
     assert row["科目编码"] == "5001080000"
     assert row["科目金额"] == 100.0
-    assert row["配置借贷方"] == "贷方"
-    assert row["事务码"] == "GBB"
-    assert row["科目修改"] == "AUF"
-    assert row["T030评估分组"] == "1000"
-    assert row["评估类"] == "7900"
     assert row["MM03截图状态"] == "已上传 1 张"
+    assert "配置借贷方" not in df.columns
+    assert "事务码" not in df.columns
+    assert "科目修改" not in df.columns
+    assert "T030评估分组" not in df.columns
+    assert "评估类" not in df.columns
 
 
 def test_sampling_scenario_table_marks_extra_accounts():
