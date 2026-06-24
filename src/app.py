@@ -520,6 +520,32 @@ def render_scenario_preview(ranked, show_amount=False):
     matched_accounts = int(preview_df["已匹配名称"].sum())
 
     if show_amount:
+        direction_filter = st.radio(
+            "场景科目方向",
+            ["全部", "借方", "贷方"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="scenario_account_direction_filter",
+            help="按 T030 配置中的借贷方向筛选场景科目汇总与公司明细。",
+        )
+
+        def detail_lookup_for(result):
+            return {
+                str(detail.get("account", "")).strip(): detail
+                for detail in result.get("account_details", []) or []
+                if detail.get("account")
+            }
+
+        def account_matches_direction(account_code, detail_lookup):
+            if direction_filter == "全部":
+                return True
+            direction = str(detail_lookup.get(str(account_code).strip(), {}).get("direction", "")).strip()
+            if direction_filter == "借方":
+                return direction in {"借方", "借贷双方"}
+            if direction_filter == "贷方":
+                return direction in {"贷方", "借贷双方"}
+            return True
+
         def account_chip(account):
             chip_class = "account-detail-chip account-extra-chip" if account.get("is_extra") else "account-detail-chip"
             extra_badge = "<span class='extra-badge'>额外</span>" if account.get("is_extra") else ""
@@ -547,7 +573,7 @@ def render_scenario_preview(ranked, show_amount=False):
             return
 
         summary_rows = []
-        for row in build_scenario_account_totals(ranked):
+        for row in build_scenario_account_totals(ranked, direction_filter=direction_filter):
             extra_note = (
                 f"<span class='summary-extra-note'>{int(row.get('extra_company_count', 0))} 家含额外科目</span>"
                 if int(row.get("extra_company_count", 0) or 0) else ""
@@ -568,7 +594,7 @@ def render_scenario_preview(ranked, show_amount=False):
         if summary_rows:
             summary_html = (
                 "<section class='scenario-total-summary'>"
-                "<div class='summary-title'>场景科目总金额汇总</div>"
+                f"<div class='summary-title'>场景科目总金额汇总<span class='summary-direction-pill'>{html.escape(direction_filter)}</span></div>"
                 "<table class='scenario-total-table'>"
                 "<thead><tr><th>审计场景</th><th>科目编码</th><th>科目描述</th><th class='amount'>总金额</th><th class='amount-share'>占比</th><th>命中公司数</th><th>提示</th></tr></thead>"
                 f"<tbody>{''.join(summary_rows)}</tbody>"
@@ -580,12 +606,17 @@ def render_scenario_preview(ranked, show_amount=False):
         for idx, company_code in enumerate(company_codes):
             scenario_rows = []
             for result in ranked:
+                detail_lookup = detail_lookup_for(result)
                 company_item = next(
                     (item for item in result.get("company_values", []) if str(item.get("company_code", "未指定公司")) == company_code),
                     None
                 )
-                scenario_amount = float(company_item.get("total_value", 0) or 0) if company_item else 0.0
-                account_values = company_item.get("account_values", []) if company_item else []
+                all_account_values = company_item.get("account_values", []) if company_item else []
+                account_values = [
+                    account for account in all_account_values
+                    if account_matches_direction(account.get("account", ""), detail_lookup)
+                ]
+                scenario_amount = sum(float(account.get("total_value", 0) or 0) for account in account_values)
                 if account_values:
                     account_html = "".join(
                         account_chip(account)
@@ -645,11 +676,24 @@ def render_scenario_preview(ranked, show_amount=False):
                 overflow: hidden;
             }}
             .summary-title {{
+                display: flex;
+                align-items: center;
+                gap: 10px;
                 padding: 12px 14px;
                 background: #eef7f7;
                 color: #00338d;
                 font-weight: 800;
                 border-bottom: 1px solid #d8dde6;
+            }}
+            .summary-direction-pill {{
+                display: inline-block;
+                border-radius: 999px;
+                border: 1px solid #00a3a1;
+                background: #fff;
+                color: #006b6b;
+                font-size: 12px;
+                font-weight: 700;
+                padding: 2px 9px;
             }}
             .scenario-total-table {{
                 width: 100%;

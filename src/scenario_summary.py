@@ -1,4 +1,16 @@
-def build_scenario_account_totals(ranked):
+def _matches_direction(detail, direction_filter):
+    if not direction_filter or direction_filter == "全部":
+        return True
+
+    direction = str((detail or {}).get("direction", "")).strip()
+    if direction_filter == "借方":
+        return direction in {"借方", "借贷双方"}
+    if direction_filter == "贷方":
+        return direction in {"贷方", "借贷双方"}
+    return True
+
+
+def build_scenario_account_totals(ranked, direction_filter="全部"):
     rows = []
     for scenario in ranked or []:
         detail_lookup = {
@@ -14,6 +26,8 @@ def build_scenario_account_totals(ranked):
                 if not account_code:
                     continue
                 detail = detail_lookup.get(account_code, {})
+                if not _matches_direction(detail, direction_filter):
+                    continue
                 entry = by_account.setdefault(account_code, {
                     "scenario": scenario.get("name", ""),
                     "account": account_code,
