@@ -96,6 +96,41 @@ def test_t030_keeps_account_modifier_separate_from_account_code():
     assert gbb_vax["KONTS"].astype(str).str.match(r"^\d{10}$").all()
 
 
+def test_t030_maps_valuation_group_and_class(tmp_path):
+    t030_path = tmp_path / "t030.csv"
+    t030_path.write_text(
+        "\n".join([
+            "KTOSL,KOMOK,BWMOD,ValCl,KONTS,KONTH",
+            "WRX,,1000,7900,2202040000,2202040000",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(t030_path), "T030")
+
+    assert ok, msg
+    assert {"KTOSL", "KOMOK", "BWMOD", "BKLAS", "KONTS", "KONTH"}.issubset(df.columns)
+    assert df.iloc[0]["BWMOD"] == "1000"
+    assert df.iloc[0]["BKLAS"] == "7900"
+
+
+def test_samples_maps_material_number(tmp_path):
+    sample_path = tmp_path / "samples.csv"
+    sample_path.write_text(
+        "\n".join([
+            "DOC_NUM,SAKNR,Material,AMOUNT",
+            "S-001,1403000000,TX5F6609-0000,10",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(sample_path), "Samples")
+
+    assert ok, msg
+    assert "MATNR" in df.columns
+    assert df.iloc[0]["MATNR"] == "TX5F6609-0000"
+
+
 def test_trial_balance_maps_company_period_and_monthly_debit_columns(tmp_path):
     tb_path = tmp_path / "trial_balance.csv"
     tb_path.write_text(

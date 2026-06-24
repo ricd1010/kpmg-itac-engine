@@ -13,6 +13,15 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
     ranked = [{
         "name": "完工入库",
         "baseline_company_code": "4000",
+        "account_details": [{
+            "account": "5001080000",
+            "description": "生产成本-半成品完工转出",
+            "direction": "贷方",
+            "ktosl": "GBB",
+            "komok": "AUF",
+            "bwmod": "1000",
+            "bklas": "7900",
+        }],
         "company_values": [{
             "company_code": "4000",
             "total_value": 100.0,
@@ -40,6 +49,11 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
     assert row["审计场景"] == "完工入库"
     assert row["科目编码"] == "5001080000"
     assert row["科目金额"] == 100.0
+    assert row["配置借贷方"] == "贷方"
+    assert row["事务码"] == "GBB"
+    assert row["科目修改"] == "AUF"
+    assert row["T030评估分组"] == "1000"
+    assert row["评估类"] == "7900"
     assert row["MM03截图状态"] == "已上传 1 张"
 
 

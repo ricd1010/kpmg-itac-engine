@@ -69,6 +69,7 @@ class OCRProcessor:
 - DOC_NUM (凭证号)
 - SAKNR (科目)
 - TXT50 (名称/总分类账名称)
+- MATNR (物料号；若截图中没有物料号则返回空字符串)
 - AMOUNT (金额，保留原始正负号和千分位格式)
 - SHKZG (借贷方向：借方填 S，贷方填 H)
 - DATE (YYYY-MM-DD)
@@ -81,7 +82,7 @@ class OCRProcessor:
 ### 格式要求：
 直接返回一个 JSON 数组，例如：
 [
-  {{"DOC_NUM": "...", "SAKNR": "...", "TXT50": "...", "AMOUNT": 12.34, "SHKZG": "S", "DATE": "2026-06-01"}},
+  {{"DOC_NUM": "...", "SAKNR": "...", "TXT50": "...", "MATNR": "...", "AMOUNT": 12.34, "SHKZG": "S", "DATE": "2026-06-01"}},
   ...
 ]
 """
@@ -134,6 +135,7 @@ class OCRProcessor:
                 "DATE": ["date", "日期", "过账日期", "记账日期", "凭证日期"],
                 "SAKNR": ["saknr", "科目", "总账科目", "帐目", "代码"],
                 "TXT50": ["txt50", "科目名称", "描述", "短文本", "名称"],
+                "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "Material"],
                 "AMOUNT": ["amount", "金额", "数值"],
                 "SHKZG": ["shkzg", "借/贷", "标识", "方向"]
             }

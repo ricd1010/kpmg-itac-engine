@@ -35,11 +35,14 @@ class PromptBuilder:
 - 只输出上述三个部分的文字内容，不要任何前言或后记。
 """
 
-    def _format_line_details(self, lines, fallback_desc, fallback_acc, amount):
+    def _format_line_details(self, lines, fallback_desc, fallback_acc, amount, fallback_matnr=""):
+        def material_text(value):
+            return f" 物料号 {value}" if value else ""
+
         if not lines:
-            return f"{fallback_desc} ({fallback_acc}) 金额 {amount}"
+            return f"{fallback_desc} ({fallback_acc}){material_text(fallback_matnr)} 金额 {amount}"
         return "；".join(
-            f"{item.get('description', '未定义科目')} ({item.get('account', '')}) 金额 {float(item.get('amount', 0) or 0):,.2f}"
+            f"{item.get('description', '未定义科目')} ({item.get('account', '')}){material_text(item.get('matnr', ''))} 金额 {float(item.get('amount', 0) or 0):,.2f}"
             for item in lines
         )
 
@@ -48,13 +51,15 @@ class PromptBuilder:
             sample_row.get('DEBIT_LINES', []),
             sample_row['DEBIT_DESC'],
             sample_row['DEBIT_ACC'],
-            sample_row['AMOUNT']
+            sample_row['AMOUNT'],
+            sample_row.get('DEBIT_MATNR', '')
         )
         credit_detail = self._format_line_details(
             sample_row.get('CREDIT_LINES', []),
             sample_row['CREDIT_DESC'],
             sample_row['CREDIT_ACC'],
-            sample_row['AMOUNT']
+            sample_row['AMOUNT'],
+            sample_row.get('CREDIT_MATNR', '')
         )
         return self.template.format(
             entity_name=context.get('entity_name', '未指定'),

@@ -10,6 +10,15 @@ from scenario_summary import build_scenario_account_totals
 def test_build_scenario_account_totals_sums_same_account_across_companies():
     ranked = [{
         "name": "采购收货",
+        "account_details": [{
+            "account": "1403000000",
+            "description": "原材料",
+            "direction": "借方",
+            "ktosl": "BSX",
+            "komok": "",
+            "bwmod": "1000",
+            "bklas": "7900",
+        }],
         "company_values": [
             {
                 "company_code": "4000",
@@ -32,6 +41,9 @@ def test_build_scenario_account_totals_sums_same_account_across_companies():
     raw_material = next(row for row in rows if row["account"] == "1403000000")
     gr_ir = next(row for row in rows if row["account"] == "2202040000")
     assert raw_material["scenario"] == "采购收货"
+    assert raw_material["direction"] == "借方"
+    assert raw_material["bwmod"] == "1000"
+    assert raw_material["bklas"] == "7900"
     assert raw_material["total_value"] == 17.0
     assert raw_material["scenario_total_value"] == 22.0
     assert round(raw_material["amount_share_pct"], 2) == 77.27

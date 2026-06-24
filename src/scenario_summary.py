@@ -1,6 +1,11 @@
 def build_scenario_account_totals(ranked):
     rows = []
     for scenario in ranked or []:
+        detail_lookup = {
+            str(detail.get("account", "")).strip(): detail
+            for detail in scenario.get("account_details", [])
+            if detail.get("account")
+        }
         by_account = {}
         for company in scenario.get("company_values", []):
             company_code = str(company.get("company_code", "未指定公司"))
@@ -8,10 +13,16 @@ def build_scenario_account_totals(ranked):
                 account_code = str(account.get("account", "")).strip()
                 if not account_code:
                     continue
+                detail = detail_lookup.get(account_code, {})
                 entry = by_account.setdefault(account_code, {
                     "scenario": scenario.get("name", ""),
                     "account": account_code,
-                    "description": account.get("description", "未知科目"),
+                    "description": detail.get("description") or account.get("description", "未知科目"),
+                    "direction": detail.get("direction", ""),
+                    "ktosl": detail.get("ktosl", ""),
+                    "komok": detail.get("komok", ""),
+                    "bwmod": detail.get("bwmod", ""),
+                    "bklas": detail.get("bklas", ""),
                     "total_value": 0.0,
                     "company_codes": set(),
                     "extra_company_count": 0,
@@ -32,6 +43,11 @@ def build_scenario_account_totals(ranked):
                 "scenario": entry["scenario"],
                 "account": entry["account"],
                 "description": entry["description"],
+                "direction": entry["direction"],
+                "ktosl": entry["ktosl"],
+                "komok": entry["komok"],
+                "bwmod": entry["bwmod"],
+                "bklas": entry["bklas"],
                 "total_value": total_value,
                 "scenario_total_value": scenario_total,
                 "amount_share_pct": (total_value / scenario_total * 100) if scenario_total else 0.0,

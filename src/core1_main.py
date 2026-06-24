@@ -72,6 +72,14 @@ class Core1Orchestrator:
             return "未指定公司"
         return s
 
+    def _clean_meta(self, val):
+        if pd.isna(val):
+            return ""
+        s = str(val).strip()
+        if not s or s.lower() in {"nan", "none", "null"}:
+            return ""
+        return s.split(".")[0] if s.endswith(".0") else s
+
     def _rule_matches(self, ktosl, komok, rule_ktosl, rule_komok):
         if ktosl != rule_ktosl:
             return False
@@ -100,6 +108,54 @@ class Core1Orchestrator:
                 continue
             for source_name in source_names:
                 target_accounts.difference_update(scenario_amount_accounts.get(source_name, set()))
+
+    def _merge_account_detail(self, detail_map, account_code, direction, ktosl, komok, bwmod, bklas):
+        if not account_code:
+            return
+        detail = detail_map.setdefault(account_code, {
+            "directions": set(),
+            "ktosl": set(),
+            "komok": set(),
+            "bwmod": set(),
+            "bklas": set(),
+        })
+        detail["directions"].add(direction)
+        for key, value in (
+            ("ktosl", ktosl),
+            ("komok", komok),
+            ("bwmod", bwmod),
+            ("bklas", bklas),
+        ):
+            if value:
+                detail[key].add(value)
+
+    def _format_direction(self, directions):
+        direction_set = set(directions or [])
+        if {"借方", "贷方"}.issubset(direction_set):
+            return "借贷双方"
+        if "借方" in direction_set:
+            return "借方"
+        if "贷方" in direction_set:
+            return "贷方"
+        return ""
+
+    def _format_meta_set(self, values):
+        return " / ".join(sorted(str(value) for value in values if value))
+
+    def _build_account_details(self, detail_map, acc_descs):
+        details = []
+        for account_code in sorted(detail_map):
+            detail = detail_map[account_code]
+            details.append({
+                "account": account_code,
+                "description": acc_descs.get(account_code, "未知科目"),
+                "direction": self._format_direction(detail.get("directions")),
+                "ktosl": self._format_meta_set(detail.get("ktosl")),
+                "komok": self._format_meta_set(detail.get("komok")),
+                "bwmod": self._format_meta_set(detail.get("bwmod")),
+                "bklas": self._format_meta_set(detail.get("bklas")),
+            })
+        return details
 
     def _apply_baseline_flags(self, company_values):
         candidates = [item for item in company_values if item.get("account_values")]
@@ -138,6 +194,7 @@ class Core1Orchestrator:
         # 结果结构：{ scenario_name: set(account_codes) }
         scenario_accounts = {name: set() for name in self.preset_mappings.keys()}
         scenario_amount_accounts = {name: set() for name in self.preset_mappings.keys()}
+        scenario_account_details = {name: {} for name in self.preset_mappings.keys()}
         
         if os.path.exists(self.t030_path):
             try:
@@ -145,8 +202,10 @@ class Core1Orchestrator:
                 df_t030.columns = [str(c).strip().upper() for c in df_t030.columns]
                 
                 for _, row in df_t030.iterrows():
-                    ktosl = str(row.get('KTOSL', '')).strip().upper()
-                    komok = str(row.get('KOMOK', '')).strip().upper()
+                    ktosl = self._clean_meta(row.get('KTOSL')).upper()
+                    komok = self._clean_meta(row.get('KOMOK')).upper()
+                    bwmod = self._clean_meta(row.get('BWMOD'))
+                    bklas = self._clean_meta(row.get('BKLAS'))
                     k1 = self._clean_acc(row.get('KONTS'))
                     k2 = self._clean_acc(row.get('KONTH'))
                     
@@ -157,6 +216,8 @@ class Core1Orchestrator:
                             if self._rule_matches(ktosl, komok, r_ktosl, r_komok):
                                 if k1: scenario_accounts[sc_name].add(k1)
                                 if k2: scenario_accounts[sc_name].add(k2)
+                                self._merge_account_detail(scenario_account_details[sc_name], k1, "借方", ktosl, komok, bwmod, bklas)
+                                self._merge_account_detail(scenario_account_details[sc_name], k2, "贷方", ktosl, komok, bwmod, bklas)
                     for sc_name, rules in self.amount_mappings.items():
                         if self._amount_rule_excluded(sc_name, ktosl, komok):
                             continue
@@ -239,6 +300,7 @@ class Core1Orchestrator:
             acc_list = sorted(list(acc_set))
             amount_acc_list = sorted(list(scenario_amount_accounts.get(name, set())))
             display_accounts = [f"{acc} ({acc_descs.get(acc, '未知科目')})" for acc in acc_list]
+            account_details = self._build_account_details(scenario_account_details.get(name, {}), acc_descs)
             company_values = []
             for company_code, amount_map in tb_amounts_by_company.items():
                 company_total = sum(amount_map.get(acc, 0) for acc in amount_acc_list)
@@ -263,6 +325,7 @@ class Core1Orchestrator:
             results.append({
                 "name": name,
                 "accounts": display_accounts,
+                "account_details": account_details,
                 "raw_accounts": acc_list,
                 "amount_accounts": amount_acc_list,
                 "total_value": sum(tb_amounts.get(acc, 0) for acc in amount_acc_list),

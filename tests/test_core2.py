@@ -23,6 +23,7 @@ def test_core2_generates_description_from_single_ocr_line(tmp_path):
         "DOC_NUM": "OCR-001",
         "SAKNR": "1403000000",
         "TXT50": "原材料",
+        "MATNR": "MAT-001",
         "AMOUNT": "1,234.50",
         "SHKZG": "",
         "DATE": "2026-06-01",
@@ -39,6 +40,7 @@ def test_core2_generates_description_from_single_ocr_line(tmp_path):
     sample = results[0]["sample_table"]
     assert sample["DOC_NUM"] == "OCR-001"
     assert sample["DEBIT_ACC"] == "1403000000"
+    assert sample["DEBIT_MATNR"] == "MAT-001"
     assert sample["CREDIT_ACC"] == Core2Orchestrator.COUNTERPARTY_PLACEHOLDER
     assert sample["AMOUNT"] == 1234.5
     assert sample["OCR_FALLBACK"] is True
@@ -131,6 +133,7 @@ def test_core2_balances_multi_line_sap_voucher_with_trailing_credit_minus(tmp_pa
             "DOC_NUM": "6000004976",
             "SAKNR": "1405020000",
             "TXT50": "库存商品-自制成品",
+            "MATNR": "TX5F6609-0000",
             "AMOUNT": "528.470,34",
             "SHKZG": "",
             "DATE": "2025-07-28",
@@ -139,6 +142,7 @@ def test_core2_balances_multi_line_sap_voucher_with_trailing_credit_minus(tmp_pa
             "DOC_NUM": "6000004976",
             "SAKNR": "1405050100",
             "TXT50": "库存商品-自制成品差异-采购差异",
+            "MATNR": "TX5F6609-0000",
             "AMOUNT": "70.000,26",
             "SHKZG": "",
             "DATE": "2025-07-28",
@@ -147,6 +151,7 @@ def test_core2_balances_multi_line_sap_voucher_with_trailing_credit_minus(tmp_pa
             "DOC_NUM": "6000004976",
             "SAKNR": "2202040000",
             "TXT50": "应付账款-GR/IR",
+            "MATNR": "TX5F6609-0000",
             "AMOUNT": "598.470,60-",
             "SHKZG": "",
             "DATE": "2025-07-28",
@@ -171,19 +176,21 @@ def test_core2_balances_multi_line_sap_voucher_with_trailing_credit_minus(tmp_pa
     assert sample["DEBIT_ACC"] == "1405020000; 1405050100"
     assert sample["CREDIT_ACC"] == "2202040000"
     assert sample["AMOUNT"] == 598470.6
+    assert sample["DEBIT_MATNR"] == "TX5F6609-0000; TX5F6609-0000"
+    assert sample["CREDIT_MATNR"] == "TX5F6609-0000"
     assert sample["DEBIT_LINES"] == [
-        {"account": "1405020000", "description": "库存商品-自制成品", "amount": 528470.34},
-        {"account": "1405050100", "description": "库存商品-自制成品差异-采购差异", "amount": 70000.26},
+        {"account": "1405020000", "description": "库存商品-自制成品", "matnr": "TX5F6609-0000", "amount": 528470.34},
+        {"account": "1405050100", "description": "库存商品-自制成品差异-采购差异", "matnr": "TX5F6609-0000", "amount": 70000.26},
     ]
     assert sample["CREDIT_LINES"] == [
-        {"account": "2202040000", "description": "应付账款-GR/IR", "amount": 598470.6},
+        {"account": "2202040000", "description": "应付账款-GR/IR", "matnr": "TX5F6609-0000", "amount": 598470.6},
     ]
 
 
 def test_normalize_samples_dataframe_removes_blank_docs_and_infers_direction():
     df = pd.DataFrame([
         {"DOC_NUM": "  ", "SAKNR": "1403000000", "AMOUNT": "1", "SHKZG": ""},
-        {"DOC_NUM": "A", "SAKNR": "0001403000000", "AMOUNT": "(9)", "SHKZG": None},
+        {"DOC_NUM": "A", "SAKNR": "0001403000000", "MATNR": "MAT-009", "AMOUNT": "(9)", "SHKZG": None},
     ])
 
     normalized = Core2Orchestrator.normalize_samples_dataframe(df)
@@ -192,6 +199,7 @@ def test_normalize_samples_dataframe_removes_blank_docs_and_infers_direction():
     row = normalized.iloc[0]
     assert row["DOC_NUM"] == "A"
     assert row["SAKNR_CLEAN"] == "1403000000"
+    assert row["MATNR"] == "MAT-009"
     assert row["SHKZG"] == "H"
     assert row["AMT_VAL"] == 9.0
 

@@ -25,6 +25,7 @@ class ReportGenerator:
                     "doc_num": doc_num,
                     "direction": direction,
                     "account": line.get("account", ""),
+                    "material": line.get("matnr", ""),
                     "description": line.get("description", ""),
                     "amount": line.get("amount", 0),
                     "date": date,
@@ -33,9 +34,9 @@ class ReportGenerator:
         if rows:
             return rows
 
-        for direction, account_key, desc_key in (
-            ("借方", "DEBIT_ACC", "DEBIT_DESC"),
-            ("贷方", "CREDIT_ACC", "CREDIT_DESC"),
+        for direction, account_key, desc_key, matnr_key in (
+            ("借方", "DEBIT_ACC", "DEBIT_DESC", "DEBIT_MATNR"),
+            ("贷方", "CREDIT_ACC", "CREDIT_DESC", "CREDIT_MATNR"),
         ):
             account = sample.get(account_key, "")
             if cls._is_placeholder_account(account):
@@ -44,6 +45,7 @@ class ReportGenerator:
                 "doc_num": doc_num,
                 "direction": direction,
                 "account": account,
+                "material": sample.get(matnr_key, ""),
                 "description": sample.get(desc_key, ""),
                 "amount": sample.get("AMOUNT", 0),
                 "date": date,
@@ -56,6 +58,7 @@ class ReportGenerator:
             "doc_num": doc_num,
             "direction": "",
             "account": sample.get("DEBIT_ACC", ""),
+            "material": sample.get("DEBIT_MATNR", ""),
             "description": sample.get("DEBIT_DESC", ""),
             "amount": sample.get("AMOUNT", 0),
             "date": date,
@@ -197,7 +200,7 @@ class ReportGenerator:
             # TOE Section (Sample List) below the D&I grid
             start_row = 26
             ws.cell(row=start_row, column=4, value="二、测试样本明细 (TOE)").font = Font(bold=True)
-            headers_toe = ["凭证号", "借贷方向", "科目", "描述", "金额", "日期"]
+            headers_toe = ["凭证号", "借贷方向", "科目", "物料号", "描述", "金额", "日期"]
             for i, h in enumerate(headers_toe):
                 cell = ws.cell(row=start_row+1, column=4+i, value=h)
                 cell.font = Font(bold=True)
@@ -212,6 +215,7 @@ class ReportGenerator:
                         toe_row["doc_num"],
                         toe_row["direction"],
                         toe_row["account"],
+                        toe_row["material"],
                         toe_row["description"],
                         toe_row["amount"],
                         toe_row["date"],

@@ -347,6 +347,48 @@ def test_core1_keeps_prd_pra_only_in_finished_goods_variance_amounts(tmp_path):
         "baseline_company_code": "4390",
     }]
 
+
+def test_core1_outputs_account_details_with_direction_and_valuation_fields(tmp_path):
+    (tmp_path / "T030.csv").write_text(
+        "\n".join([
+            "KTOSL,KOMOK,BWMOD,BKLAS,KONTS,KONTH",
+            "WRX,,1000,7900,1403000000,2202040000",
+            "BSX,,1000,7900,1403000000,1403000000",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "SKAT.csv").write_text(
+        "\n".join([
+            "SAKNR,TXT50",
+            "1403000000,原材料",
+            "2202040000,应付账款-GR/IR",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "TrialBalance.csv").write_text(
+        "\n".join([
+            "COMPANY_CODE,PERIOD,SAKNR,TXT50,DMBTR_DEBIT",
+            "4000,202512,2202040000,应付账款-GR/IR,50",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    results = Core1Orchestrator(tmp_path).run()
+    purchase_receipt = next(result for result in results if result["name"] == "采购收货")
+    detail_by_account = {
+        detail["account"]: detail
+        for detail in purchase_receipt["account_details"]
+    }
+
+    assert purchase_receipt["amount_accounts"] == ["1403000000", "2202040000"]
+    assert purchase_receipt["total_value"] == 50
+    assert detail_by_account["1403000000"]["direction"] == "借贷双方"
+    assert detail_by_account["1403000000"]["ktosl"] == "BSX / WRX"
+    assert detail_by_account["1403000000"]["bwmod"] == "1000"
+    assert detail_by_account["1403000000"]["bklas"] == "7900"
+    assert detail_by_account["2202040000"]["direction"] == "贷方"
+    assert detail_by_account["2202040000"]["ktosl"] == "WRX"
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__])

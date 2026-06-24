@@ -22,8 +22,10 @@ def test_report_generator_expands_pair_samples_to_voucher_lines(tmp_path):
                     "DOC_NUM": "8174291462",
                     "DATE": "2026-01-08",
                     "DEBIT_ACC": "6401000000",
+                    "DEBIT_MATNR": "MAT-A",
                     "DEBIT_DESC": "主营业务成本",
                     "CREDIT_ACC": "1405010000",
+                    "CREDIT_MATNR": "MAT-A",
                     "CREDIT_DESC": "库存商品-产成品",
                     "AMOUNT": 13.21,
                 },
@@ -35,8 +37,10 @@ def test_report_generator_expands_pair_samples_to_voucher_lines(tmp_path):
                     "DOC_NUM": "8174291462",
                     "DATE": "2026-01-08",
                     "DEBIT_ACC": "6401000000",
+                    "DEBIT_MATNR": "MAT-B",
                     "DEBIT_DESC": "主营业务成本",
                     "CREDIT_ACC": "1405010000",
+                    "CREDIT_MATNR": "MAT-B",
                     "CREDIT_DESC": "库存商品-产成品",
                     "AMOUNT": 54.18,
                 },
@@ -46,10 +50,11 @@ def test_report_generator_expands_pair_samples_to_voucher_lines(tmp_path):
 
     ws = load_workbook(path)["销售成本结转"]
 
-    assert [ws.cell(row=27, column=col).value for col in range(4, 10)] == [
+    assert [ws.cell(row=27, column=col).value for col in range(4, 11)] == [
         "凭证号",
         "借贷方向",
         "科目",
+        "物料号",
         "描述",
         "金额",
         "日期",
@@ -61,7 +66,8 @@ def test_report_generator_expands_pair_samples_to_voucher_lines(tmp_path):
         "6401000000",
         "1405010000",
     ]
-    assert [ws.cell(row=row, column=8).value for row in range(28, 32)] == [13.21, 13.21, 54.18, 54.18]
+    assert [ws.cell(row=row, column=7).value for row in range(28, 32)] == ["MAT-A", "MAT-A", "MAT-B", "MAT-B"]
+    assert [ws.cell(row=row, column=9).value for row in range(28, 32)] == [13.21, 13.21, 54.18, 54.18]
 
 
 def test_report_generator_uses_multiline_sample_details(tmp_path):
@@ -82,11 +88,11 @@ def test_report_generator_uses_multiline_sample_details(tmp_path):
                     "CREDIT_DESC": "应付账款-GR/IR",
                     "AMOUNT": 598470.6,
                     "DEBIT_LINES": [
-                        {"account": "1405020000", "description": "库存商品-自制成品", "amount": 528470.34},
-                        {"account": "1405050100", "description": "库存商品-自制成品差异-采购差异", "amount": 70000.26},
+                        {"account": "1405020000", "matnr": "TX5F6609-0000", "description": "库存商品-自制成品", "amount": 528470.34},
+                        {"account": "1405050100", "matnr": "TX5F6609-0000", "description": "库存商品-自制成品差异-采购差异", "amount": 70000.26},
                     ],
                     "CREDIT_LINES": [
-                        {"account": "2202040000", "description": "应付账款-GR/IR", "amount": 598470.6},
+                        {"account": "2202040000", "matnr": "TX5F6609-0000", "description": "应付账款-GR/IR", "amount": 598470.6},
                     ],
                 },
             },
@@ -101,4 +107,5 @@ def test_report_generator_uses_multiline_sample_details(tmp_path):
         "1405050100",
         "2202040000",
     ]
-    assert [ws.cell(row=row, column=8).value for row in range(28, 31)] == [528470.34, 70000.26, 598470.6]
+    assert [ws.cell(row=row, column=7).value for row in range(28, 31)] == ["TX5F6609-0000", "TX5F6609-0000", "TX5F6609-0000"]
+    assert [ws.cell(row=row, column=9).value for row in range(28, 31)] == [528470.34, 70000.26, 598470.6]

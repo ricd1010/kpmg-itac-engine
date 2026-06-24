@@ -121,7 +121,7 @@ class DataValidator:
 
             for i in range(df.shape[1]):
                 col_name = df.columns[i]
-                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC", "BWKEY", "BUKRS", "BWMOD", "MATNR"]):
+                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC", "BWKEY", "BUKRS", "BWMOD", "BKLAS", "MATNR"]):
                     df.iloc[:, i] = df.iloc[:, i].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
                 if any(k in col_name for k in ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]):
                     s = df.iloc[:, i].astype(str).str.replace(r'[^0-9.\-]', '', regex=True)
@@ -137,7 +137,7 @@ class DataValidator:
         KEYWORDS = {
             "saknr": 20, "konts": 20, "konth": 20, "总帐科目": 20, "总账科目": 20,
             "dmbtr": 15, "借方余额": 15, "贷方余额": 15, "借方金额": 15, "贷方金额": 15,
-            "评估分组代码": 15, "科目修改": 15, "trs": 15, "valcl": 15,
+            "评估分组代码": 15, "科目修改": 15, "trs": 15, "valcl": 15, "bklas": 15, "评估类": 15,
             "已结转余额": 15, "前一期间的余额": 15, "在制表期间的借方余额": 15,
             "本月借方发生额": 15, "本年借方累计": 15, "本年贷方累计": 15, "会计期间": 15, "公司代码": 15,
             "bwkey": 20, "bukrs": 20, "bwmod": 20, "评估范围": 20, "评估分组": 20,
@@ -243,12 +243,14 @@ class DataValidator:
             "SCENARIO": ["scenario", "audit_scenario", "审计场景", "场景", "目标场景", "测试场景"],
             "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
             "KOMOK": ["komok", "科目修改", "修改码"],
-            "MATNR": ["matnr", "物料", "物料号", "物料编码", "Material"],
+            "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "物料代码", "Material"],
         }
         if file_type == "T030":
             mapping = {
                 "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
                 "KOMOK": ["komok", "科目修改", "修改码"],
+                "BWMOD": ["bwmod", "评估分组", "评估分组代码", "valuation grouping code", "valuationgroupingcode"],
+                "BKLAS": ["bklas", "valcl", "评估类", "评估类字段", "valuation class", "valuationclass"],
                 "KONTS": ["konts", "借方科目", "总帐科目", "总账科目"],
                 "KONTH": ["konth", "贷方科目", "总帐科目", "总账科目"],
             }

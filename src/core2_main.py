@@ -6,7 +6,7 @@ from llm_client import LLMClient
 class Core2Orchestrator:
     COUNTERPARTY_PLACEHOLDER = "OCR未识别对方科目"
     AUTO_SCENARIO_LABELS = {"", "auto", "自动识别", "自動識別", "automatic"}
-    SAMPLE_BASE_COLUMNS = ["DOC_NUM", "SAKNR", "TXT50", "AMOUNT", "SHKZG", "DATE", "SCENARIO"]
+    SAMPLE_BASE_COLUMNS = ["DOC_NUM", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE", "SCENARIO"]
     SAMPLE_OUTPUT_COLUMNS = SAMPLE_BASE_COLUMNS + ["AMT_SIGNED", "AMT_VAL", "SAKNR_CLEAN"]
 
     def __init__(self, data_dir):
@@ -103,12 +103,14 @@ class Core2Orchestrator:
         doc_num = cls._clean_text(record.get("DOC_NUM"))
         saknr = cls._clean_text(record.get("SAKNR"))
         txt50 = cls._clean_text(record.get("TXT50")) or "未定义科目"
+        matnr = cls._clean_text(record.get("MATNR"))
         date = cls._clean_text(record.get("DATE")) or "2026-06-01"
         scenario = cls._normalize_scenario(record.get("SCENARIO"))
         return {
             "DOC_NUM": doc_num,
             "SAKNR": saknr,
             "TXT50": txt50,
+            "MATNR": matnr,
             "AMOUNT": amount_text if amount_text else signed_amount,
             "SHKZG": cls._normalize_direction(record.get("SHKZG"), signed_amount),
             "DATE": date,
@@ -228,8 +230,10 @@ class Core2Orchestrator:
                             "DATE": d_row.get('DATE', '2026-06-01'),
                             "DEBIT_ACC": d_row['SAKNR'],
                             "DEBIT_DESC": d_row.get('TXT50', '未定义科目'),
+                            "DEBIT_MATNR": d_row.get('MATNR', ''),
                             "CREDIT_ACC": c_row['SAKNR'],
                             "CREDIT_DESC": c_row.get('TXT50', '未定义科目'),
+                            "CREDIT_MATNR": c_row.get('MATNR', ''),
                             "AMOUNT": amt
                         })
             if not synthesized:
@@ -246,6 +250,7 @@ class Core2Orchestrator:
         return {
             "account": row.get("SAKNR", ""),
             "description": row.get("TXT50", "未定义科目"),
+            "matnr": row.get("MATNR", ""),
             "amount": abs(float(row.get("AMT_VAL", 0) or 0)),
         }
 
@@ -276,8 +281,10 @@ class Core2Orchestrator:
             "DATE": debit_rows.iloc[0].get("DATE", credit_rows.iloc[0].get("DATE", "2026-06-01")),
             "DEBIT_ACC": self._format_lines(debit_lines, "account"),
             "DEBIT_DESC": self._format_lines(debit_lines, "description"),
+            "DEBIT_MATNR": self._format_lines(debit_lines, "matnr"),
             "CREDIT_ACC": self._format_lines(credit_lines, "account"),
             "CREDIT_DESC": self._format_lines(credit_lines, "description"),
+            "CREDIT_MATNR": self._format_lines(credit_lines, "matnr"),
             "AMOUNT": round(debit_total, 2),
             "DEBIT_LINES": debit_lines,
             "CREDIT_LINES": credit_lines,
@@ -295,25 +302,32 @@ class Core2Orchestrator:
             amount = abs(float(row.get("AMT_VAL", 0) or 0))
             account = row.get("SAKNR", "")
             description = row.get("TXT50", "未定义科目")
+            matnr = row.get("MATNR", "")
             direction = str(row.get("SHKZG", "S")).upper()
             if direction == "H":
                 debit_acc = self.COUNTERPARTY_PLACEHOLDER
                 debit_desc = self.COUNTERPARTY_PLACEHOLDER
+                debit_matnr = ""
                 credit_acc = account
                 credit_desc = description
+                credit_matnr = matnr
             else:
                 debit_acc = account
                 debit_desc = description
+                debit_matnr = matnr
                 credit_acc = self.COUNTERPARTY_PLACEHOLDER
                 credit_desc = self.COUNTERPARTY_PLACEHOLDER
+                credit_matnr = ""
 
             synthesized.append({
                 "DOC_NUM": doc_num,
                 "DATE": row.get("DATE", "2026-06-01"),
                 "DEBIT_ACC": debit_acc,
                 "DEBIT_DESC": debit_desc,
+                "DEBIT_MATNR": debit_matnr,
                 "CREDIT_ACC": credit_acc,
                 "CREDIT_DESC": credit_desc,
+                "CREDIT_MATNR": credit_matnr,
                 "AMOUNT": amount,
                 "OCR_FALLBACK": True,
                 "OCR_NOTE": "OCR未识别完整借贷配对，已基于命中场景科目的单边记录生成描述。"
