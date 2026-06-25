@@ -54,12 +54,13 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
     assert row["审计场景"] == "完工入库"
     assert row["科目编码"] == "5001080000"
     assert row["科目金额"] == 100.0
+    assert row["占比"] == "100.00%"
     assert row["MM03截图状态"] == "匹配 1 张"
-    assert row["MM03匹配截图"] == "MM03采购.png"
     assert row["MM03物料号"] == "10000000"
     assert row["MM03工厂编号"] == "4110"
     assert row["MM03评估分类"] == "3000"
     assert "评估范围" not in df.columns
+    assert "MM03匹配截图" not in df.columns
     assert "MM03物料描述" not in df.columns
     assert "MM03价格控制" not in df.columns
     assert "配置借贷方" not in df.columns
@@ -149,10 +150,10 @@ def test_sampling_scenario_table_matches_multiple_mm03_records_with_fuzzy_plant(
 
     row = df.iloc[0]
     assert row["T001K评估分组代码"] == "4110"
+    assert row["占比"] == "100.00%"
     assert row["MM03截图状态"] == "匹配 2 张"
-    assert row["MM03匹配截图"] == "MM03采购.png；MM03销售.png"
     assert row["MM03物料号"] == "10000000；50006420"
-    assert row["MM03工厂编号"] == "410"
+    assert row["MM03工厂编号"] == "4110"
     assert row["MM03评估分类"] == "3000；7921"
 
 
@@ -193,3 +194,23 @@ def test_sampling_scenario_table_ignores_dirty_session_state_records():
     assert row["MM03物料号"] == "10000000"
     assert row["MM03工厂编号"] == "4000"
     assert row["MM03评估分类"] == "3000"
+
+
+def test_sampling_scenario_table_account_share_uses_scenario_total():
+    ranked = [{
+        "name": "产成品差异",
+        "company_values": [{
+            "company_code": "4000",
+            "total_value": 100.0,
+            "account_values": [
+                {"account": "1403010200", "description": "原材料差异", "total_value": 80.0},
+                {"account": "1409030200", "description": "半成品差异", "total_value": 20.0},
+            ],
+        }],
+    }]
+
+    df = build_sampling_scenario_table(ranked)
+
+    shares = dict(zip(df["科目编码"], df["占比"]))
+    assert shares["1403010200"] == "80.00%"
+    assert shares["1409030200"] == "20.00%"

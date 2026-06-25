@@ -243,6 +243,8 @@ if "current_step" not in st.session_state: st.session_state.current_step = 1
 if "audit_context" not in st.session_state: st.session_state.audit_context = {}
 if "ocr_samples" not in st.session_state: st.session_state.ocr_samples = []
 if "ocr_samples_editor_nonce" not in st.session_state: st.session_state.ocr_samples_editor_nonce = 0
+if "sample_table_records" not in st.session_state: st.session_state.sample_table_records = []
+if "sample_table_signature" not in st.session_state: st.session_state.sample_table_signature = None
 if "processed_image_names" not in st.session_state: st.session_state.processed_image_names = set()
 if "results" not in st.session_state: st.session_state.results = None
 if "api_key_valid" not in st.session_state: st.session_state.api_key_valid = False
@@ -519,6 +521,54 @@ def apply_scenario_to_dataframe(df, selected_scenario, ranked):
 
     records = apply_scenario_to_records(result.to_dict("records"), AUTO_SCENARIO_LABEL, ranked)
     return pd.DataFrame(records)
+
+def normalize_sample_preview_records(records, source_type="", source_file=""):
+    normalized = []
+    for record in records or []:
+        item = {str(k).strip().upper(): v for k, v in dict(record).items()}
+        item["SCENARIO"] = str(item.get("SCENARIO", "") or "").strip()
+        item["DOC_NUM"] = item.get("DOC_NUM", "")
+        item["DATE"] = item.get("DATE", "")
+        item["SAKNR"] = item.get("SAKNR", "")
+        item["TXT50"] = item.get("TXT50", "")
+        item["MATNR"] = item.get("MATNR", "")
+        item["AMOUNT"] = item.get("AMOUNT", "")
+        item["SHKZG"] = item.get("SHKZG", "")
+        item["SOURCE_TYPE"] = item.get("SOURCE_TYPE", source_type)
+        item["SOURCE_FILE"] = item.get("SOURCE_FILE", source_file)
+        normalized.append(item)
+    return normalized
+
+def apply_bulk_scenario(records, selected_scenario):
+    if not selected_scenario:
+        return [dict(record) for record in records or []]
+    updated = []
+    for record in records or []:
+        item = dict(record)
+        item["SCENARIO"] = selected_scenario
+        updated.append(item)
+    return updated
+
+def split_sample_preview_records(records):
+    table_records = []
+    image_records = []
+    for record in records or []:
+        item = dict(record)
+        source_type = str(item.get("SOURCE_TYPE", "")).strip()
+        if source_type == "样本清单":
+            table_records.append(item)
+        else:
+            image_records.append(item)
+    return table_records, image_records
+
+def valid_sample_scenarios(records, scenario_options):
+    allowed = set(scenario_options or [])
+    invalid = []
+    for idx, record in enumerate(records or [], start=1):
+        scenario = str(record.get("SCENARIO", "")).strip()
+        if scenario not in allowed:
+            invalid.append(idx)
+    return invalid
 
 def render_scenario_preview(ranked, show_amount=False):
     if not ranked:
@@ -1194,6 +1244,8 @@ if st.session_state.results:
             st.session_state.current_step = 1
             st.session_state.results = None
             st.session_state.ocr_samples = []
+            st.session_state.sample_table_records = []
+            st.session_state.sample_table_signature = None
             st.session_state.processed_image_names = set()
             st.session_state.show_balloons = False
             st.session_state.base_files_ready = False
@@ -1397,24 +1449,53 @@ elif st.session_state.current_step == 3:
             st.dataframe(sampling_df.head(50), width="stretch")
 
     st.write("---")
-    sample_scenario_options = [AUTO_SCENARIO_LABEL] + scenario_names_from_preview()
+    sample_scenario_options = scenario_names_from_preview()
+    if not sample_scenario_options:
+        st.warning("请先完成场景匹配，系统需要 10 个审计场景后才能录入样本。")
+        st.stop()
+    bulk_scenario_label = "不批量指定"
     sample_scenario_choice = st.selectbox(
-        "本次上传样本对应审计场景",
-        sample_scenario_options,
-        help="选择具体场景时，本次样本只会生成该场景的 TOD/TOE；选择自动识别时，系统仅在唯一命中场景时自动填充，多个候选场景需要在预览表中手动选择。",
+        "批量指定本次上传样本审计场景（可选）",
+        [bulk_scenario_label] + sample_scenario_options,
+        help="如本次上传的多张凭证或多份表格都属于同一场景，可在这里批量指定；否则在下方预览表逐行选择 10 个场景之一。",
     )
-    if st.session_state.ocr_samples and sample_scenario_choice != AUTO_SCENARIO_LABEL:
-        synced_samples = apply_scenario_to_records(
-            st.session_state.ocr_samples,
-            sample_scenario_choice,
-            st.session_state.scenario_preview,
-        )
-        if synced_samples != st.session_state.ocr_samples:
-            st.session_state.ocr_samples = synced_samples
+    selected_bulk_scenario = "" if sample_scenario_choice == bulk_scenario_label else sample_scenario_choice
+    if selected_bulk_scenario and (st.session_state.ocr_samples or st.session_state.sample_table_records):
+        table_records = apply_bulk_scenario(st.session_state.sample_table_records, selected_bulk_scenario)
+        image_records = apply_bulk_scenario(st.session_state.ocr_samples, selected_bulk_scenario)
+        if table_records != st.session_state.sample_table_records or image_records != st.session_state.ocr_samples:
+            st.session_state.sample_table_records = table_records
+            st.session_state.ocr_samples = image_records
             st.session_state.ocr_samples_editor_nonce += 1
     s1, s2 = st.columns(2)
-    with s1: samples_file = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"])
+    with s1: samples_files = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
     with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    if samples_files:
+        samples_signature = upload_signature(samples_files)
+        if samples_signature != st.session_state.sample_table_signature:
+            account_descriptions = load_account_description_map(SESSION_DATA_DIR)
+            table_records = []
+            errors = []
+            for uploaded in samples_files:
+                is_v, msg, s_df = DataValidator.validate_file(uploaded, "Samples")
+                if not is_v:
+                    errors.append(f"{uploaded.name}: {msg}")
+                    continue
+                s_df.columns = [str(col).strip().upper() for col in s_df.columns]
+                s_records = enrich_samples_with_account_descriptions(s_df.to_dict("records"), account_descriptions)
+                s_records = normalize_sample_preview_records(s_records, source_type="样本清单", source_file=uploaded.name)
+                s_records = apply_bulk_scenario(s_records, selected_bulk_scenario)
+                table_records.extend(s_records)
+            if errors:
+                st.error("；".join(errors))
+            else:
+                st.session_state.sample_table_records = table_records
+                st.session_state.sample_table_signature = samples_signature
+                st.session_state.ocr_samples_editor_nonce += 1
+                st.success(f"已加载 {len(samples_files)} 个样本清单文件，共 {len(table_records)} 行样本。")
+    elif st.session_state.sample_table_records:
+        st.info(f"已加载本会话的样本清单，共 {len(st.session_state.sample_table_records)} 行。")
+
     if voucher_images:
         # Check if there are NEW images to process
         new_imgs = [img for img in voucher_images if img.name not in st.session_state.processed_image_names]
@@ -1441,25 +1522,27 @@ elif st.session_state.current_step == 3:
                             for it in res["items"]:
                                 if it.get("DOC_NUM") and str(it.get("DOC_NUM")).lower() != "null":
                                     parsed_items.append(enrich_samples_with_account_descriptions([it], account_descriptions)[0])
-                            parsed_items = apply_scenario_to_records(parsed_items, sample_scenario_choice, st.session_state.scenario_preview)
+                            parsed_items = normalize_sample_preview_records(parsed_items, source_type="凭证截图", source_file=img.name)
+                            parsed_items = apply_bulk_scenario(parsed_items, selected_bulk_scenario)
                             for it in parsed_items:
-                                item_id = f"{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
-                                if item_id not in [f"{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
+                                item_id = f"{it.get('SOURCE_FILE')}_{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
+                                if item_id not in [f"{s.get('SOURCE_FILE')}_{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
                                     st.session_state.ocr_samples.append(it)
                             st.session_state.processed_image_names.add(img.name)
                         status.update(label=f"✅ {img.name} 完成", state="complete")
             finally:
                 st.session_state.ocr_busy = False
                 st.rerun() # Refresh to enable button
-    if st.session_state.ocr_samples:
+    combined_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
+    if combined_sample_records:
         st.write("**📋 已录入样本预览**")
-        ocr_df = pd.DataFrame(st.session_state.ocr_samples)
-        preferred_columns = ["SCENARIO", "DOC_NUM", "DATE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG"]
+        ocr_df = pd.DataFrame(combined_sample_records)
+        preferred_columns = ["SOURCE_TYPE", "SOURCE_FILE", "SCENARIO", "DOC_NUM", "DATE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG"]
         for col in preferred_columns:
             if col not in ocr_df.columns:
                 ocr_df[col] = ""
         ocr_df["SCENARIO"] = ocr_df["SCENARIO"].apply(
-            lambda value: value if value in sample_scenario_options else AUTO_SCENARIO_LABEL
+            lambda value: value if value in sample_scenario_options else ""
         )
         remaining_columns = [col for col in ocr_df.columns if col not in preferred_columns]
         ocr_df = ocr_df[preferred_columns + remaining_columns]
@@ -1467,8 +1550,10 @@ elif st.session_state.current_step == 3:
             ocr_df,
             width="stretch",
             num_rows="dynamic",
-            key=f"ocr_samples_editor_{len(st.session_state.ocr_samples)}_{sample_scenario_options.index(sample_scenario_choice)}_{st.session_state.ocr_samples_editor_nonce}",
+            key=f"ocr_samples_editor_{len(combined_sample_records)}_{st.session_state.ocr_samples_editor_nonce}",
             column_config={
+                "SOURCE_TYPE": st.column_config.TextColumn("来源类型", disabled=True),
+                "SOURCE_FILE": st.column_config.TextColumn("来源文件", disabled=True),
                 "SCENARIO": st.column_config.SelectboxColumn("审计场景", options=sample_scenario_options, required=True),
                 "DOC_NUM": st.column_config.TextColumn("DOC_NUM", required=True),
                 "DATE": st.column_config.TextColumn("DATE"),
@@ -1479,32 +1564,33 @@ elif st.session_state.current_step == 3:
                 "SHKZG": st.column_config.TextColumn("SHKZG"),
             },
         )
-        st.session_state.ocr_samples = edited_ocr_df.fillna("").to_dict("records")
+        edited_records = edited_ocr_df.fillna("").to_dict("records")
+        st.session_state.sample_table_records, st.session_state.ocr_samples = split_sample_preview_records(edited_records)
     st.write("---")
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
         if st.button("返回上一步", width="stretch"): go_to_step(2)
     with nav_cols[2]:
         # Only enable button if ocr is not busy AND we have either a file or OCR samples
-        btn_disabled = st.session_state.ocr_busy or (not samples_file and not st.session_state.ocr_samples)
+        final_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
+        btn_disabled = st.session_state.ocr_busy or not final_sample_records
         if st.button("🚀 生成最终底稿", width="stretch", disabled=btn_disabled):
             with st.spinner("AI 正在撰写穿行测试描述..."):
                 c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
-                if samples_file:
-                    is_v, msg, s_df = DataValidator.validate_file(samples_file, "Samples")
-                    if not is_v: st.error(msg); st.stop()
-                    s_df = apply_scenario_to_dataframe(s_df, sample_scenario_choice, ranked)
-                else:
-                    lines = []
-                    for s in st.session_state.ocr_samples:
-                        lines.append({"SCENARIO": s.get("SCENARIO"), "DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "MATNR": s.get("MATNR"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
-                    s_df = pd.DataFrame(lines)
+                invalid_rows = valid_sample_scenarios(final_sample_records, sample_scenario_options)
+                if invalid_rows:
+                    st.error(f"请为每条样本指定 10 个审计场景之一；以下行未完成选择：{', '.join(map(str, invalid_rows[:20]))}")
+                    st.stop()
+                lines = []
+                for s in final_sample_records:
+                    lines.append({"SCENARIO": s.get("SCENARIO"), "DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "MATNR": s.get("MATNR"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
+                s_df = pd.DataFrame(lines)
                 s_df = Core2Orchestrator.normalize_samples_dataframe(s_df)
                 for col in ["SCENARIO", "DOC_NUM", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE"]:
                     if col not in s_df.columns:
                         s_df[col] = ""
-                if s_df["SCENARIO"].astype(str).str.strip().eq("").any():
-                    st.error("请为每条样本指定审计场景；自动识别仅在唯一命中场景时会自动填充，多个候选场景需要手动选择。")
+                if s_df["SCENARIO"].astype(str).str.strip().isin(["", AUTO_SCENARIO_LABEL]).any():
+                    st.error("请为每条样本指定 10 个审计场景之一。")
                     st.stop()
                 s_df = s_df[["SCENARIO", "DOC_NUM", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE"]]
                 s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding='utf-8-sig')

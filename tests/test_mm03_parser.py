@@ -30,7 +30,7 @@ def test_parse_mm03_ocr_text_prefers_title_material_number_and_normalizes_fields
 
     assert record["source_file"] == "MM03销售.png"
     assert record["material_number"] == "50006420"
-    assert record["plant"] == "410"
+    assert record["plant"] == "4110"
     assert record["valuation_class"] == "7921"
     assert set(record.keys()) == {"source_file", "material_number", "plant", "valuation_class"}
 
@@ -55,5 +55,37 @@ def test_parse_mm03_ocr_text_normalizes_valuation_class_ocr_noise():
     record = parse_mm03_ocr_text(text, "MM03采购.png")
 
     assert record["material_number"] == "10000000"
-    assert record["plant"] == "410"
+    assert record["plant"] == "4110"
+    assert record["valuation_class"] == "3000"
+
+
+def test_mm03_dataframe_rows_normalize_three_character_plant():
+    from mm03_parser import mm03_records_to_dataframe_rows
+
+    rows = mm03_records_to_dataframe_rows([{
+        "source_file": "MM03采购.png",
+        "material_number": "10000000",
+        "plant": "410",
+        "valuation_class": "3000",
+    }])
+
+    assert rows[0]["工厂编号"] == "4110"
+
+
+def test_mm03_ignores_plant_inventory_label_when_finding_plant():
+    text = """
+    显示物辫10000000 (原辅材料)
+    工厂库存
+    IOOOOOO0
+    [
+    410
+    青岛新希望琴牌乳业工厂
+    评怙分类
+    SOO0
+    """
+
+    record = parse_mm03_ocr_text(text, "MM03采购.png")
+
+    assert record["material_number"] == "10000000"
+    assert record["plant"] == "4110"
     assert record["valuation_class"] == "3000"

@@ -1,6 +1,7 @@
 import re
 
 import pandas as pd
+from mm03_parser import normalize_plant_code
 
 
 def _clean_code(value):
@@ -40,6 +41,35 @@ def _as_list(value):
     if isinstance(value, tuple):
         return list(value)
     return []
+
+
+def _account_amount(account):
+    account = _as_dict(account)
+    return _as_float(account.get("combined_value", account.get("total_value")))
+
+
+def _scenario_account_share_map(scenario):
+    by_account = {}
+    for company_item in _as_list(scenario.get("company_values")):
+        company_item = _as_dict(company_item)
+        for account in _as_list(company_item.get("account_values")):
+            account = _as_dict(account)
+            account_code = _clean_code(account.get("account"))
+            if not account_code:
+                continue
+            by_account[account_code] = by_account.get(account_code, 0.0) + _account_amount(account)
+
+    scenario_total = sum(value for value in by_account.values() if value)
+    if not scenario_total:
+        return {}
+    return {
+        account_code: value / scenario_total * 100
+        for account_code, value in by_account.items()
+    }
+
+
+def _format_pct(value):
+    return f"{float(value):.2f}%" if value else ""
 
 
 def _parse_account_label(label):
@@ -107,7 +137,7 @@ def _join_mm03(records, key):
             continue
         raw_value = record.get(key, "")
         if key in {"material_number", "plant", "valuation_class"}:
-            value = _clean_code(raw_value)
+            value = normalize_plant_code(raw_value) if key == "plant" else _clean_code(raw_value)
         else:
             if isinstance(raw_value, (list, tuple, set)):
                 raw_value = next((item for item in raw_value if str(item).strip()), "")
@@ -135,7 +165,6 @@ def _mm03_fields(company_code, valuation_group, mm03_image_names=None, mm03_reco
     matched = _select_mm03_records(company_code, valuation_group, mm03_records)
     return {
         "MM03截图状态": _mm03_status(mm03_image_names, mm03_records, matched),
-        "MM03匹配截图": _join_mm03(matched, "source_file"),
         "MM03物料号": _join_mm03(matched, "material_number"),
         "MM03工厂编号": _join_mm03(matched, "plant"),
         "MM03评估分类": _join_mm03(matched, "valuation_class"),
@@ -151,6 +180,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
         scenario_name = str(scenario.get("name", "")).strip()
         baseline_company = str(scenario.get("baseline_company_code") or "").strip()
         company_values = _as_list(scenario.get("company_values"))
+        account_share_map = _scenario_account_share_map(scenario)
 
         if company_values:
             for company_item in company_values:
@@ -172,6 +202,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                         "科目编码": "",
                         "科目描述": "该公司最后期间未命中此场景科目",
                         "科目金额": 0.0,
+                        "占比": "",
                         "场景金额": scenario_amount,
                         "抽样建议": "如该场景为测试范围，请补充对应会计凭证或说明未命中原因",
                     } | mm03_fields)
@@ -180,15 +211,17 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 for account in account_values:
                     account = _as_dict(account)
                     is_extra = bool(account.get("is_extra"))
+                    account_code = _clean_code(account.get("account"))
                     rows.append({
                         "公司代码": company_code,
                         "T001K评估分组代码": valuation_group,
                         "审计场景": scenario_name,
                         "基准公司": baseline_company,
                         "是否额外科目": "是" if is_extra else "否",
-                        "科目编码": _clean_code(account.get("account")),
+                        "科目编码": account_code,
                         "科目描述": str(account.get("description") or ""),
                         "科目金额": _as_float(account.get("total_value")),
+                        "占比": _format_pct(account_share_map.get(account_code, 0.0)),
                         "场景金额": scenario_amount,
                         "抽样建议": "优先抽样：相比基准公司多出的实际命中科目" if is_extra else "按场景金额和样本覆盖情况抽样",
                     } | mm03_fields)
@@ -205,6 +238,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "科目编码": "",
                 "科目描述": "未识别到关联科目",
                 "科目金额": 0.0,
+                "占比": "",
                 "场景金额": _as_float(scenario.get("total_value")),
                 "抽样建议": "先完成 T030/SKAT 匹配，再上传余额表生成公司维度抽样范围",
                 **_mm03_fields("", "", mm03_image_names, mm03_records),
@@ -222,6 +256,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "科目编码": account_code,
                 "科目描述": description,
                 "科目金额": 0.0,
+                "占比": "",
                 "场景金额": _as_float(scenario.get("total_value")),
                 "抽样建议": "上传余额表后可生成公司维度金额和优先级",
                 **_mm03_fields("", "", mm03_image_names, mm03_records),

@@ -29,6 +29,18 @@ def _normalize_code(value, *, field=""):
     return re.sub(r"[^0-9A-Za-z_.-]", "", text)
 
 
+def normalize_plant_code(value):
+    text = _normalize_code(value).upper()
+    text = re.sub(r"[^0-9A-Z]", "", text)
+    if len(text) == 3:
+        # SAP plant is fixed at four characters. OCR often drops a repeated
+        # middle character in screenshots, for example 4110 -> 410.
+        return text[:2] + text[1:]
+    if len(text) > 4:
+        return text[:4]
+    return text
+
+
 def _next_value(lines, labels, *, numeric=False, field=""):
     label_set = tuple(labels)
     for idx, line in enumerate(lines):
@@ -143,17 +155,18 @@ def _find_price_control(lines):
 
 def _find_plant(lines):
     for idx, line in enumerate(lines):
-        if "工厂" in line and len(line) <= 4:
+        if line.strip() in {"工厂", "Plant"}:
             for candidate in lines[idx + 1:idx + 5]:
-                plant = _normalize_code(candidate)
-                if re.fullmatch(r"\d{3,4}", plant):
+                plant = normalize_plant_code(candidate)
+                if re.fullmatch(r"[A-Z0-9]{4}", plant):
                     return plant
 
     for idx, line in enumerate(lines):
-        if "青岛" in line or "工厂" in line:
+        text = _clean_text(line)
+        if "青岛" in text or ("工厂" in text and len(text) > 4 and "工厂库存" not in text):
             for candidate in reversed(lines[max(0, idx - 4):idx]):
-                plant = _normalize_code(candidate)
-                if re.fullmatch(r"\d{3,4}", plant):
+                plant = normalize_plant_code(candidate)
+                if re.fullmatch(r"[A-Z0-9]{4}", plant):
                     return plant
     return ""
 
@@ -188,7 +201,7 @@ def mm03_records_to_dataframe_rows(records):
         rows.append({
             "MM03文件": record.get("source_file", ""),
             "物料号": record.get("material_number", ""),
-            "工厂编号": record.get("plant", ""),
+            "工厂编号": normalize_plant_code(record.get("plant", "")),
             "评估分类": record.get("valuation_class", ""),
         })
     return rows
