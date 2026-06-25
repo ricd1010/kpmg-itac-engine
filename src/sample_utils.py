@@ -1,6 +1,19 @@
 import os
 import pandas as pd
 
+SAMPLE_PREVIEW_COLUMNS = [
+    "SOURCE_TYPE",
+    "SOURCE_FILE",
+    "SCENARIO",
+    "DOC_NUM",
+    "DATE",
+    "SAKNR",
+    "TXT50",
+    "MATNR",
+    "AMOUNT",
+    "SHKZG",
+]
+
 
 def clean_account_code(val):
     if pd.isna(val):
@@ -58,3 +71,43 @@ def enrich_samples_with_account_descriptions(samples, descriptions):
             item["TXT50"] = descriptions[account_code]
         enriched.append(item)
     return enriched
+
+
+def _editor_text_value(value):
+    if pd.isna(value):
+        return ""
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return ""
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def prepare_sample_editor_dataframe(records, scenario_options, preferred_columns=None):
+    """Build a Streamlit data_editor-safe sample preview dataframe.
+
+    st.data_editor checks each configured column against the underlying pandas
+    dtype. Sample uploads often parse AMOUNT as numeric and DATE as datetime,
+    while the UI intentionally uses text columns so users can correct OCR/export
+    values. Normalize the preview dataframe to object/string cells before
+    rendering to avoid column type compatibility errors.
+    """
+    columns = list(preferred_columns or SAMPLE_PREVIEW_COLUMNS)
+    df = pd.DataFrame(records or [])
+    for col in columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    allowed_scenarios = set(scenario_options or [])
+    df["SCENARIO"] = df["SCENARIO"].map(_editor_text_value).apply(
+        lambda value: value if value in allowed_scenarios else ""
+    )
+
+    for col in df.columns:
+        if col != "SCENARIO":
+            df[col] = df[col].map(_editor_text_value)
+
+    remaining_columns = [col for col in df.columns if col not in columns]
+    return df[columns + remaining_columns]

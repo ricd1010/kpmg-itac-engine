@@ -17,7 +17,7 @@ from report_generator import ReportGenerator
 from data_validator import DataValidator
 from scenario_summary import amount_for_direction, build_scenario_account_totals
 from sampling_scenario import build_sampling_scenario_table
-from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
+from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map, prepare_sample_editor_dataframe
 from mm03_parser import mm03_records_to_dataframe_rows, parse_mm03_ocr_text
 from dotenv import load_dotenv
 
@@ -1536,16 +1536,12 @@ elif st.session_state.current_step == 3:
     combined_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
     if combined_sample_records:
         st.write("**📋 已录入样本预览**")
-        ocr_df = pd.DataFrame(combined_sample_records)
         preferred_columns = ["SOURCE_TYPE", "SOURCE_FILE", "SCENARIO", "DOC_NUM", "DATE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG"]
-        for col in preferred_columns:
-            if col not in ocr_df.columns:
-                ocr_df[col] = ""
-        ocr_df["SCENARIO"] = ocr_df["SCENARIO"].apply(
-            lambda value: value if value in sample_scenario_options else ""
+        ocr_df = prepare_sample_editor_dataframe(
+            combined_sample_records,
+            sample_scenario_options,
+            preferred_columns=preferred_columns,
         )
-        remaining_columns = [col for col in ocr_df.columns if col not in preferred_columns]
-        ocr_df = ocr_df[preferred_columns + remaining_columns]
         edited_ocr_df = st.data_editor(
             ocr_df,
             width="stretch",
