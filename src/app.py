@@ -27,7 +27,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 13
+SCENARIO_PREVIEW_SCHEMA_VERSION = 14
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -534,6 +534,56 @@ def render_scenario_preview(ranked, show_amount=False):
                 "</span>"
             )
 
+        def summary_breakdown_for_row(summary_row):
+            scenario_name = str(summary_row.get("scenario", "")).strip()
+            account_code = str(summary_row.get("account", "")).strip()
+            company_amounts = {}
+
+            for result in ranked:
+                if str(result.get("name", "")).strip() != scenario_name:
+                    continue
+                for company in result.get("company_values", []) or []:
+                    company_code = str(company.get("company_code", "未指定公司"))
+                    for account in company.get("account_values", []) or []:
+                        if str(account.get("account", "")).strip() != account_code:
+                            continue
+                        debit_value = amount_for_direction(account, "借方")
+                        credit_value = amount_for_direction(account, "贷方")
+                        combined_value = amount_for_direction(account, "全部")
+                        if not (debit_value or credit_value or combined_value):
+                            continue
+                        company_amount = company_amounts.setdefault(company_code, {
+                            "company_code": company_code,
+                            "debit_value": 0.0,
+                            "credit_value": 0.0,
+                            "total_value": 0.0,
+                        })
+                        company_amount["debit_value"] += debit_value
+                        company_amount["credit_value"] += credit_value
+                        company_amount["total_value"] += combined_value
+
+            if company_amounts:
+                company_amount_list = sorted(
+                    company_amounts.values(),
+                    key=lambda item: (
+                        -float(item.get("total_value", 0) or 0),
+                        str(item.get("company_code", ""))
+                    )
+                )
+                return {
+                    "debit_value": sum(float(item.get("debit_value", 0) or 0) for item in company_amount_list),
+                    "credit_value": sum(float(item.get("credit_value", 0) or 0) for item in company_amount_list),
+                    "total_value": sum(float(item.get("total_value", 0) or 0) for item in company_amount_list),
+                    "company_amounts": company_amount_list,
+                }
+
+            return {
+                "debit_value": float(summary_row.get("debit_value", 0) or 0),
+                "credit_value": float(summary_row.get("credit_value", 0) or 0),
+                "total_value": float(summary_row.get("total_value", 0) or 0),
+                "company_amounts": summary_row.get("company_amounts", []) or [],
+            }
+
         company_codes = set()
         has_extra_accounts = False
         for result in ranked:
@@ -555,8 +605,9 @@ def render_scenario_preview(ranked, show_amount=False):
                 if int(row.get("extra_company_count", 0) or 0) else ""
             )
             company_codes_text = "、".join(str(code) for code in row.get("company_codes", []))
+            breakdown = summary_breakdown_for_row(row)
             company_amount_rows = []
-            for company_amount in row.get("company_amounts", []):
+            for company_amount in breakdown.get("company_amounts", []):
                 company_amount_rows.append(
                     "<tr>"
                     f"<td>{html.escape(str(company_amount.get('company_code', '未指定公司')))}</td>"
@@ -581,9 +632,9 @@ def render_scenario_preview(ranked, show_amount=False):
                 "</summary>"
                 "<div class='summary-side-panel'>"
                 "<div class='side-metric-row'>"
-                f"<span>借方金额 <strong>{float(row.get('debit_value', 0) or 0):,.2f}</strong></span>"
-                f"<span>贷方金额 <strong>{float(row.get('credit_value', 0) or 0):,.2f}</strong></span>"
-                f"<span>借贷合计 <strong>{float(row.get('total_value', 0) or 0):,.2f}</strong></span>"
+                f"<span>借方金额 <strong>{float(breakdown.get('debit_value', 0) or 0):,.2f}</strong></span>"
+                f"<span>贷方金额 <strong>{float(breakdown.get('credit_value', 0) or 0):,.2f}</strong></span>"
+                f"<span>借贷合计 <strong>{float(breakdown.get('total_value', 0) or 0):,.2f}</strong></span>"
                 "</div>"
                 "<table class='summary-side-table'>"
                 "<thead><tr><th>公司代码</th><th class='amount'>借方金额</th><th class='amount'>贷方金额</th><th class='amount'>合计金额</th></tr></thead>"
