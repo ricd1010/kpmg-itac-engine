@@ -154,3 +154,42 @@ def test_sampling_scenario_table_matches_multiple_mm03_records_with_fuzzy_plant(
     assert row["MM03物料号"] == "10000000；50006420"
     assert row["MM03工厂编号"] == "410"
     assert row["MM03评估分类"] == "3000；7921"
+
+
+def test_sampling_scenario_table_ignores_dirty_session_state_records():
+    ranked = [{
+        "name": "生产领料",
+        "company_values": [{
+            "company_code": "4000",
+            "total_value": {"stale": "bad"},
+            "account_values": [{
+                "account": ["5001010000"],
+                "description": "生产成本-原辅料",
+                "total_value": [],
+            }],
+        }],
+    }]
+    mm03_records = [
+        object(),
+        {
+            "source_file": "MM03采购.png",
+            "material_number": ["10000000"],
+            "plant": ["4000"],
+            "valuation_class": ["3000"],
+        },
+    ]
+
+    df = build_sampling_scenario_table(
+        ranked,
+        t001k_df=object(),
+        mm03_image_names=object(),
+        mm03_records=mm03_records,
+    )
+
+    row = df.iloc[0]
+    assert row["科目金额"] == 0.0
+    assert row["场景金额"] == 0.0
+    assert row["MM03截图状态"] == "匹配 1 张"
+    assert row["MM03物料号"] == "10000000"
+    assert row["MM03工厂编号"] == "4000"
+    assert row["MM03评估分类"] == "3000"
