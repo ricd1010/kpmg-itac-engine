@@ -39,7 +39,18 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
         "BWMOD": "0001",
     }])
 
-    df = build_sampling_scenario_table(ranked, t001k, ["mm03.png"])
+    mm03_records = [{
+        "source_file": "MM03采购.png",
+        "material_number": "10000000",
+        "material_description": "原辅材料",
+        "plant": "4000",
+        "plant_name": "测试工厂",
+        "base_unit": "KG",
+        "valuation_class": "3000",
+        "price_control": "S",
+    }]
+
+    df = build_sampling_scenario_table(ranked, t001k, ["mm03.png"], mm03_records=mm03_records)
 
     assert len(df) == 1
     row = df.iloc[0]
@@ -49,7 +60,12 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
     assert row["审计场景"] == "完工入库"
     assert row["科目编码"] == "5001080000"
     assert row["科目金额"] == 100.0
-    assert row["MM03截图状态"] == "已上传 1 张"
+    assert row["MM03截图状态"] == "匹配 1 张"
+    assert row["MM03匹配截图"] == "MM03采购.png"
+    assert row["MM03物料号"] == "10000000"
+    assert row["MM03物料描述"] == "原辅材料"
+    assert row["MM03工厂"] == "4000"
+    assert row["MM03评估类"] == "3000"
     assert "配置借贷方" not in df.columns
     assert "事务码" not in df.columns
     assert "科目修改" not in df.columns
@@ -93,3 +109,53 @@ def test_sampling_scenario_table_supports_step2_preview_without_balance():
     assert df.iloc[0]["科目编码"] == "1403000000"
     assert df.iloc[0]["科目描述"] == "原材料"
     assert df.iloc[0]["MM03截图状态"] == "待补充"
+
+
+def test_sampling_scenario_table_matches_multiple_mm03_records_with_fuzzy_plant():
+    ranked = [{
+        "name": "生产领料",
+        "company_values": [{
+            "company_code": "4110",
+            "total_value": 500.0,
+            "account_values": [{
+                "account": "5001010000",
+                "description": "生产成本-原辅料",
+                "total_value": 500.0,
+                "is_extra": False,
+            }],
+        }],
+    }]
+    t001k = pd.DataFrame([{
+        "BWKEY": "4110",
+        "BUKRS": "4110",
+        "BWMOD": "4110",
+    }])
+    mm03_records = [
+        {
+            "source_file": "MM03采购.png",
+            "material_number": "10000000",
+            "material_description": "原辅材料",
+            "plant": "410",
+            "valuation_class": "3000",
+        },
+        {
+            "source_file": "MM03销售.png",
+            "material_number": "50006420",
+            "material_description": "成品",
+            "plant": "410",
+            "valuation_class": "7921",
+        },
+    ]
+
+    df = build_sampling_scenario_table(
+        ranked,
+        t001k,
+        ["MM03采购.png", "MM03销售.png"],
+        mm03_records=mm03_records,
+    )
+
+    row = df.iloc[0]
+    assert row["MM03截图状态"] == "匹配 2 张"
+    assert row["MM03匹配截图"] == "MM03采购.png；MM03销售.png"
+    assert row["MM03物料号"] == "10000000；50006420"
+    assert row["MM03评估类"] == "3000；7921"

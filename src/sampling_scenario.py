@@ -47,13 +47,71 @@ def _build_t001k_lookup(t001k_df):
     return lookup
 
 
-def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_names=None):
+def _code_matches(left, right):
+    left = _clean_code(left)
+    right = _clean_code(right)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    if len(longer) - len(shorter) != 1:
+        return False
+    return any(longer[:idx] + longer[idx + 1:] == shorter for idx in range(len(longer)))
+
+
+def _select_mm03_records(company_code, valuation_area, mm03_records):
+    candidates = []
+    for record in mm03_records or []:
+        plant = record.get("plant", "")
+        valuation = record.get("valuation_area", "")
+        if (
+            _code_matches(plant, company_code)
+            or _code_matches(plant, valuation_area)
+            or _code_matches(valuation, company_code)
+            or _code_matches(valuation, valuation_area)
+        ):
+            candidates.append(record)
+    return candidates
+
+
+def _join_mm03(records, key):
+    values = []
+    for record in records or []:
+        value = str(record.get(key, "")).strip()
+        if value and value not in values:
+            values.append(value)
+    return "；".join(values)
+
+
+def _mm03_status(mm03_image_names=None, mm03_records=None, matched_records=None):
+    if matched_records:
+        return f"匹配 {len(matched_records)} 张"
+    if mm03_records:
+        return f"已解析 {len(mm03_records)} 张（本行未匹配）"
+    if mm03_image_names:
+        return f"已上传 {len(mm03_image_names)} 张"
+    return "待补充"
+
+
+def _mm03_fields(company_code, valuation_area, mm03_image_names=None, mm03_records=None):
+    matched = _select_mm03_records(company_code, valuation_area, mm03_records)
+    return {
+        "MM03截图状态": _mm03_status(mm03_image_names, mm03_records, matched),
+        "MM03匹配截图": _join_mm03(matched, "source_file"),
+        "MM03物料号": _join_mm03(matched, "material_number"),
+        "MM03物料描述": _join_mm03(matched, "material_description"),
+        "MM03工厂": _join_mm03(matched, "plant"),
+        "MM03工厂名称": _join_mm03(matched, "plant_name"),
+        "MM03基本单位": _join_mm03(matched, "base_unit"),
+        "MM03评估类": _join_mm03(matched, "valuation_class"),
+        "MM03价格控制": _join_mm03(matched, "price_control"),
+    }
+
+
+def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_names=None, mm03_records=None):
     rows = []
     t001k_lookup = _build_t001k_lookup(t001k_df)
-    mm03_status = (
-        f"已上传 {len(mm03_image_names)} 张"
-        if mm03_image_names else "待补充"
-    )
 
     for scenario in ranked_scenarios or []:
         scenario_name = str(scenario.get("name", "")).strip()
@@ -64,13 +122,15 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
             for company_item in company_values:
                 company_code = _clean_code(company_item.get("company_code"))
                 t001k_info = t001k_lookup.get(company_code, {})
+                valuation_area = t001k_info.get("valuation_area", "")
+                mm03_fields = _mm03_fields(company_code, valuation_area, mm03_image_names, mm03_records)
                 scenario_amount = float(company_item.get("total_value", 0) or 0)
                 account_values = company_item.get("account_values") or []
 
                 if not account_values:
                     rows.append({
                         "公司代码": company_code,
-                        "评估范围": t001k_info.get("valuation_area", ""),
+                        "评估范围": valuation_area,
                         "评估分组": t001k_info.get("valuation_group", ""),
                         "审计场景": scenario_name,
                         "基准公司": baseline_company,
@@ -80,15 +140,14 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                         "科目金额": 0.0,
                         "场景金额": scenario_amount,
                         "抽样建议": "如该场景为测试范围，请补充对应会计凭证或说明未命中原因",
-                        "MM03截图状态": mm03_status,
-                    })
+                    } | mm03_fields)
                     continue
 
                 for account in account_values:
                     is_extra = bool(account.get("is_extra"))
                     rows.append({
                         "公司代码": company_code,
-                        "评估范围": t001k_info.get("valuation_area", ""),
+                        "评估范围": valuation_area,
                         "评估分组": t001k_info.get("valuation_group", ""),
                         "审计场景": scenario_name,
                         "基准公司": baseline_company,
@@ -98,8 +157,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                         "科目金额": float(account.get("total_value", 0) or 0),
                         "场景金额": scenario_amount,
                         "抽样建议": "优先抽样：相比基准公司多出的实际命中科目" if is_extra else "按场景金额和样本覆盖情况抽样",
-                        "MM03截图状态": mm03_status,
-                    })
+                    } | mm03_fields)
             continue
 
         accounts = scenario.get("accounts") or scenario.get("raw_accounts") or []
@@ -116,7 +174,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "科目金额": 0.0,
                 "场景金额": float(scenario.get("total_value", 0) or 0),
                 "抽样建议": "先完成 T030/SKAT 匹配，再上传余额表生成公司维度抽样范围",
-                "MM03截图状态": mm03_status,
+                **_mm03_fields("", "", mm03_image_names, mm03_records),
             })
             continue
 
@@ -134,7 +192,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "科目金额": 0.0,
                 "场景金额": float(scenario.get("total_value", 0) or 0),
                 "抽样建议": "上传余额表后可生成公司维度金额和优先级",
-                "MM03截图状态": mm03_status,
+                **_mm03_fields("", "", mm03_image_names, mm03_records),
             })
 
     return pd.DataFrame(rows)

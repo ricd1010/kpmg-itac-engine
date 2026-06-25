@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import datetime
 import re
+import hashlib
 import base64
 import io
 import time
@@ -17,6 +18,7 @@ from data_validator import DataValidator
 from scenario_summary import amount_for_direction, build_scenario_account_totals
 from sampling_scenario import build_sampling_scenario_table
 from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
+from mm03_parser import mm03_records_to_dataframe_rows, parse_mm03_ocr_text
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -254,6 +256,8 @@ if "trial_balance_signature" not in st.session_state: st.session_state.trial_bal
 if "t001k_ready" not in st.session_state: st.session_state.t001k_ready = False
 if "t001k_signature" not in st.session_state: st.session_state.t001k_signature = None
 if "mm03_image_names" not in st.session_state: st.session_state.mm03_image_names = []
+if "mm03_records" not in st.session_state: st.session_state.mm03_records = []
+if "mm03_signature" not in st.session_state: st.session_state.mm03_signature = None
 if "scenario_preview" not in st.session_state: st.session_state.scenario_preview = []
 if "scenario_preview_schema_version" not in st.session_state: st.session_state.scenario_preview_schema_version = None
 if "scroll_to_top" not in st.session_state: st.session_state.scroll_to_top = False
@@ -395,10 +399,22 @@ def save_uploaded_images(files, folder_name):
     target_dir = os.path.join(SESSION_DATA_DIR, folder_name)
     os.makedirs(target_dir, exist_ok=True)
     saved_names = []
+    used_names = set()
     for uploaded in files or []:
-        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", uploaded.name)
+        data = uploaded.getvalue()
+        original_name = os.path.basename(uploaded.name)
+        stem, ext = os.path.splitext(original_name)
+        safe_stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._") or "image"
+        safe_ext = re.sub(r"[^A-Za-z0-9.]+", "", ext.lower()) or ".png"
+        digest = hashlib.sha1(data + original_name.encode("utf-8", errors="ignore")).hexdigest()[:8]
+        safe_name = f"{safe_stem}_{digest}{safe_ext}"
+        counter = 2
+        while safe_name in used_names:
+            safe_name = f"{safe_stem}_{digest}_{counter}{safe_ext}"
+            counter += 1
+        used_names.add(safe_name)
         with open(os.path.join(target_dir, safe_name), "wb") as f:
-            f.write(uploaded.getvalue())
+            f.write(data)
         saved_names.append(safe_name)
     return saved_names
 
@@ -1187,6 +1203,8 @@ if st.session_state.results:
             st.session_state.t001k_ready = False
             st.session_state.t001k_signature = None
             st.session_state.mm03_image_names = []
+            st.session_state.mm03_records = []
+            st.session_state.mm03_signature = None
             st.session_state.scenario_preview = []
             st.session_state.scenario_preview_schema_version = None
             st.rerun()
@@ -1328,16 +1346,38 @@ elif st.session_state.current_step == 3:
         st.success("已加载本会话的 T001K。")
 
     if mm03_images:
-        names = save_uploaded_images(mm03_images, "mm03")
-        st.session_state.mm03_image_names = sorted(set(st.session_state.mm03_image_names).union(names))
+        mm03_signature = upload_signature(mm03_images)
+        if mm03_signature != st.session_state.mm03_signature:
+            with st.status(f"正在解析 {len(mm03_images)} 张 MM03 截图...", expanded=False) as status:
+                ocr_engine = get_ocr_engine()
+                names = save_uploaded_images(mm03_images, "mm03")
+                records = []
+                for uploaded, saved_name in zip(mm03_images, names):
+                    image_bytes = uploaded.getvalue()
+                    parsed = ocr_engine.process_and_parse(image_bytes, llm_client=None)
+                    if "error" in parsed:
+                        record = parse_mm03_ocr_text("", saved_name)
+                        record["ocr_status"] = parsed["error"]
+                    else:
+                        record = parse_mm03_ocr_text(parsed.get("OCR_TEXT", ""), saved_name)
+                        record["ocr_status"] = "已解析"
+                    records.append(record)
+                st.session_state.mm03_image_names = names
+                st.session_state.mm03_records = records
+                st.session_state.mm03_signature = mm03_signature
+                status.update(label=f"已解析 {len(records)} 张 MM03 截图", state="complete")
     if st.session_state.mm03_image_names:
-        st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，将在抽样场景表中标记为已补充。")
+        st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，已解析 {len(st.session_state.mm03_records)} 张，将在抽样场景表中补充物料主数据字段。")
+    if st.session_state.mm03_records:
+        with st.expander("预览 MM03 解析结果", expanded=False):
+            st.dataframe(pd.DataFrame(mm03_records_to_dataframe_rows(st.session_state.mm03_records)), width="stretch")
 
     t001k_df = load_session_table("T001K")
     sampling_df = build_sampling_scenario_table(
         st.session_state.scenario_preview,
         t001k_df=t001k_df,
         mm03_image_names=st.session_state.mm03_image_names,
+        mm03_records=st.session_state.mm03_records,
     )
     if sampling_df.empty:
         st.info("当前暂无可导出的抽样场景表，请先完成 T030/SKAT 场景匹配。")
@@ -1352,7 +1392,7 @@ elif st.session_state.current_step == 3:
                 width="stretch",
             )
         with export_cols[1]:
-            st.caption("抽样场景表包含公司代码、评估范围、评估分组、审计场景、科目、金额、额外科目标记和 MM03 补充状态。")
+            st.caption("抽样场景表包含公司代码、评估范围、评估分组、审计场景、科目、金额、额外科目标记，以及 MM03 物料号、物料描述、工厂、评估类等补充字段。")
         with st.expander("预览抽样场景表", expanded=False):
             st.dataframe(sampling_df.head(50), width="stretch")
 
