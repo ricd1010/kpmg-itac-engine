@@ -13,7 +13,7 @@ import textwrap
 import streamlit.components.v1 as components
 from core1_main import Core1Orchestrator
 from core2_main import Core2Orchestrator
-from report_generator import ReportGenerator
+from report_generator_general import GeneralAuditReportGenerator as ReportGenerator
 from data_validator import DataValidator
 from scenario_summary import amount_for_direction, build_scenario_account_totals
 from sampling_scenario import build_sampling_scenario_table
@@ -711,11 +711,70 @@ def build_audit_dashboard_rows(ranked):
                 })
     return pd.DataFrame(rows)
 
+def build_config_mapping_rows(ranked):
+    rows = []
+    for scenario in ranked or []:
+        scenario_name = str(scenario.get("name", "") or "").strip()
+        for detail in scenario.get("account_details", []) or []:
+            rows.append({
+                "审计场景": scenario_name,
+                "科目编码": str(detail.get("account", "") or "").strip(),
+                "科目描述": str(detail.get("description", "未知科目") or "未知科目").strip(),
+                "配置借贷方": str(detail.get("direction", "") or "").strip(),
+                "匹配状态": "未匹配科目名称" if "未知科目" in str(detail.get("description", "")) else "已匹配",
+            })
+        if not scenario.get("account_details"):
+            for account in scenario.get("accounts", []) or []:
+                account_text = str(account)
+                rows.append({
+                    "审计场景": scenario_name,
+                    "科目编码": account_text.split(" ")[0],
+                    "科目描述": account_text,
+                    "配置借贷方": "",
+                    "匹配状态": "未匹配科目名称" if "未知科目" in account_text else "已匹配",
+                })
+    return pd.DataFrame(rows)
+
 def render_general_audit_dashboard(ranked):
     dashboard_df = build_audit_dashboard_rows(ranked)
     if dashboard_df.empty:
-        st.info("上传余额表后，这里会展示按审计场景、公司和科目归集的财务影响分析。")
-        with st.expander("查看配置映射明细", expanded=True):
+        mapping_df = build_config_mapping_rows(ranked)
+        scenario_count = len(ranked or [])
+        account_count = int(len(mapping_df)) if not mapping_df.empty else 0
+        unmatched_count = int((mapping_df["匹配状态"] == "未匹配科目名称").sum()) if not mapping_df.empty else 0
+        matched_count = max(account_count - unmatched_count, 0)
+
+        st.markdown("### 审计价值 Dashboard")
+        st.caption("已完成 SAP 自动分录配置到财务科目的映射。上传科目余额/发生额表后，将进一步量化各场景对财务报表科目的影响。")
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("识别业务场景", f"{scenario_count}")
+        metric_cols[1].metric("配置关联科目", f"{account_count}")
+        metric_cols[2].metric("已匹配科目名称", f"{matched_count}")
+        metric_cols[3].metric("待补充科目名称", f"{unmatched_count}")
+
+        st.info(
+            "审计价值摘要：当前已把 SAP 自动过账配置转化为可审计的业务场景与财务科目清单。"
+            "下一步补充金额表后，系统会自动生成场景金额排行、重点科目贡献、额外科目提示和抽样覆盖建议。"
+        )
+
+        if not mapping_df.empty:
+            filter_cols = st.columns([1.4, 1])
+            selected_scenarios = filter_cols[0].multiselect(
+                "审计场景",
+                sorted(mapping_df["审计场景"].dropna().unique()),
+                default=[],
+                placeholder="全部场景",
+            )
+            unmatched_only = filter_cols[1].checkbox("只看待补充科目名称")
+            filtered_mapping = mapping_df.copy()
+            if selected_scenarios:
+                filtered_mapping = filtered_mapping[filtered_mapping["审计场景"].isin(selected_scenarios)]
+            if unmatched_only:
+                filtered_mapping = filtered_mapping[filtered_mapping["匹配状态"] == "未匹配科目名称"]
+            st.markdown("**配置映射预览**")
+            st.dataframe(filtered_mapping, width="stretch", hide_index=True)
+
+        with st.expander("技术明细：查看底层配置映射表", expanded=False):
             render_scenario_preview(ranked, show_amount=False)
         return
 
@@ -747,11 +806,30 @@ def render_general_audit_dashboard(ranked):
         .sort_values("合计金额", ascending=False)
         .head(5)
     )
-
-    st.info(
-        f"金额影响最大的场景是 **{top_scenario['审计场景']}**，归集金额 **{float(top_scenario['合计金额']):,.2f}**。"
-        " 下方可进一步筛选公司、科目和额外科目，定位需要抽样覆盖或重点复核的对象。"
+    extra_companies = (
+        dashboard_df[dashboard_df["是否额外科目"] == "是"]
+        .groupby("公司代码", as_index=False)
+        .size()
+        .sort_values("size", ascending=False)
+        .head(3)
     )
+    sample_focus = top_accounts.head(3).apply(
+        lambda row: f"{row['审计场景']} - {row['科目编码']} {row['科目描述']}",
+        axis=1,
+    ).tolist()
+
+    summary_lines = [
+        f"金额影响最大的场景是 **{top_scenario['审计场景']}**，归集金额 **{float(top_scenario['合计金额']):,.2f}**。",
+        f"金额贡献最高的科目是 **{top_accounts.iloc[0]['科目编码']} {top_accounts.iloc[0]['科目描述']}**，建议优先纳入样本覆盖。",
+    ]
+    if not extra_companies.empty:
+        company_text = "、".join(f"{row['公司代码']}（{int(row['size'])} 条）" for _, row in extra_companies.iterrows())
+        summary_lines.append(f"额外科目较集中的公司包括：**{company_text}**，建议复核其业务模式或配置差异。")
+    if sample_focus:
+        summary_lines.append("建议优先抽样对象：" + "；".join(sample_focus[:3]) + "。")
+
+    st.markdown("**审计价值摘要**")
+    st.info("\n\n".join(summary_lines))
 
     filter_cols = st.columns([1.3, 1.3, 1, 1])
     selected_scenarios = filter_cols[0].multiselect(
@@ -1615,77 +1693,78 @@ elif st.session_state.current_step == 3:
     render_general_audit_dashboard(st.session_state.scenario_preview)
 
     st.write("---")
-    st.markdown("**抽样准备：补充主数据并导出抽样场景表**")
-    st.caption("可选：补充公司代码与评估范围、物料主数据等信息，用于把金额分析转换成可执行的样本覆盖范围。技术字段默认保留在抽样准备区。")
-    master_cols = st.columns(2)
-    with master_cols[0]:
-        t001k_file = st.file_uploader("T001K 公司代码/评估分组代码表", type=["csv", "xlsx", "xls"])
-    with master_cols[1]:
-        mm03_images = st.file_uploader("MM03 物料主数据截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    with st.expander("技术补充与抽样场景表（可选）", expanded=False):
+        st.markdown("**补充主数据并导出抽样场景表**")
+        st.caption("补充公司代码与评估范围、物料主数据等 SAP 技术信息，用于把金额分析转换成可执行的样本覆盖范围。")
+        master_cols = st.columns(2)
+        with master_cols[0]:
+            t001k_file = st.file_uploader("T001K 公司代码/评估分组代码表", type=["csv", "xlsx", "xls"])
+        with master_cols[1]:
+            mm03_images = st.file_uploader("MM03 物料主数据截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
-    if t001k_file:
-        t001k_signature = upload_signature(t001k_file)
-        if t001k_signature != st.session_state.t001k_signature:
-            is_v, msg = validate_upload_to_session(t001k_file, "T001K")
-            if is_v:
-                st.session_state.t001k_ready = True
-                st.session_state.t001k_signature = t001k_signature
-                st.success("T001K 已加载，抽样场景表将补充评估分组代码。")
-            else:
-                st.error(f"❌ T001K 失败: {msg}")
-    elif st.session_state.t001k_ready:
-        st.success("已加载本会话的 T001K。")
+        if t001k_file:
+            t001k_signature = upload_signature(t001k_file)
+            if t001k_signature != st.session_state.t001k_signature:
+                is_v, msg = validate_upload_to_session(t001k_file, "T001K")
+                if is_v:
+                    st.session_state.t001k_ready = True
+                    st.session_state.t001k_signature = t001k_signature
+                    st.success("T001K 已加载，抽样场景表将补充评估分组代码。")
+                else:
+                    st.error(f"❌ T001K 失败: {msg}")
+        elif st.session_state.t001k_ready:
+            st.success("已加载本会话的 T001K。")
 
-    if mm03_images:
-        mm03_signature = upload_signature(mm03_images)
-        if mm03_signature != st.session_state.mm03_signature:
-            with st.status(f"正在解析 {len(mm03_images)} 张 MM03 截图...", expanded=False) as status:
-                ocr_engine = get_ocr_engine()
-                names = save_uploaded_images(mm03_images, "mm03")
-                records = []
-                for uploaded, saved_name in zip(mm03_images, names):
-                    image_bytes = uploaded.getvalue()
-                    parsed = ocr_engine.process_and_parse(image_bytes, llm_client=None)
-                    if "error" in parsed:
-                        record = parse_mm03_ocr_text("", saved_name)
-                        record["ocr_status"] = parsed["error"]
-                    else:
-                        record = parse_mm03_ocr_text(parsed.get("OCR_TEXT", ""), saved_name)
-                        record["ocr_status"] = "已解析"
-                    records.append(record)
-                st.session_state.mm03_image_names = names
-                st.session_state.mm03_records = records
-                st.session_state.mm03_signature = mm03_signature
-                status.update(label=f"已解析 {len(records)} 张 MM03 截图", state="complete")
-    if st.session_state.mm03_image_names:
-        st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，已解析 {len(st.session_state.mm03_records)} 张，将在抽样场景表中补充物料号、工厂编号与评估分类。")
-    if st.session_state.mm03_records:
-        with st.expander("预览 MM03 解析结果", expanded=False):
-            st.dataframe(pd.DataFrame(mm03_records_to_dataframe_rows(st.session_state.mm03_records)), width="stretch")
+        if mm03_images:
+            mm03_signature = upload_signature(mm03_images)
+            if mm03_signature != st.session_state.mm03_signature:
+                with st.status(f"正在解析 {len(mm03_images)} 张 MM03 截图...", expanded=False) as status:
+                    ocr_engine = get_ocr_engine()
+                    names = save_uploaded_images(mm03_images, "mm03")
+                    records = []
+                    for uploaded, saved_name in zip(mm03_images, names):
+                        image_bytes = uploaded.getvalue()
+                        parsed = ocr_engine.process_and_parse(image_bytes, llm_client=None)
+                        if "error" in parsed:
+                            record = parse_mm03_ocr_text("", saved_name)
+                            record["ocr_status"] = parsed["error"]
+                        else:
+                            record = parse_mm03_ocr_text(parsed.get("OCR_TEXT", ""), saved_name)
+                            record["ocr_status"] = "已解析"
+                        records.append(record)
+                    st.session_state.mm03_image_names = names
+                    st.session_state.mm03_records = records
+                    st.session_state.mm03_signature = mm03_signature
+                    status.update(label=f"已解析 {len(records)} 张 MM03 截图", state="complete")
+        if st.session_state.mm03_image_names:
+            st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，已解析 {len(st.session_state.mm03_records)} 张，将在抽样场景表中补充物料号、工厂编号与评估分类。")
+        if st.session_state.mm03_records:
+            with st.expander("预览 MM03 解析结果", expanded=False):
+                st.dataframe(pd.DataFrame(mm03_records_to_dataframe_rows(st.session_state.mm03_records)), width="stretch")
 
-    t001k_df = load_session_table("T001K")
-    sampling_df = build_sampling_scenario_table(
-        st.session_state.scenario_preview,
-        t001k_df=t001k_df,
-        mm03_image_names=st.session_state.mm03_image_names,
-        mm03_records=st.session_state.mm03_records,
-    )
-    if sampling_df.empty:
-        st.info("当前暂无可导出的抽样场景表，请先完成 T030/SKAT 场景匹配。")
-    else:
-        export_cols = st.columns([1.2, 2.8])
-        with export_cols[0]:
-            st.download_button(
-                "📥 导出抽样场景表",
-                data=dataframe_to_excel_bytes(sampling_df, "抽样场景表"),
-                file_name="Sampling_Scenario_Table.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                width="stretch",
-            )
-        with export_cols[1]:
-            st.caption("抽样场景表包含公司代码、T001K 评估分组代码、审计场景、科目、金额、额外科目标记，以及 MM03 物料号、工厂编号、评估分类。")
-        with st.expander("预览抽样场景表", expanded=False):
-            st.dataframe(sampling_df.head(50), width="stretch")
+        t001k_df = load_session_table("T001K")
+        sampling_df = build_sampling_scenario_table(
+            st.session_state.scenario_preview,
+            t001k_df=t001k_df,
+            mm03_image_names=st.session_state.mm03_image_names,
+            mm03_records=st.session_state.mm03_records,
+        )
+        if sampling_df.empty:
+            st.info("当前暂无可导出的抽样场景表，请先完成自动分录映射。")
+        else:
+            export_cols = st.columns([1.2, 2.8])
+            with export_cols[0]:
+                st.download_button(
+                    "📥 导出抽样场景表",
+                    data=dataframe_to_excel_bytes(sampling_df, "抽样场景表"),
+                    file_name="Sampling_Scenario_Table.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    width="stretch",
+                )
+            with export_cols[1]:
+                st.caption("抽样场景表包含公司代码、评估分组、审计场景、科目、金额、额外科目标记，以及物料主数据补充信息。")
+            with st.expander("预览抽样场景表", expanded=False):
+                st.dataframe(sampling_df.head(50), width="stretch")
 
     st.write("---")
     sample_scenario_options = scenario_names_from_preview()
