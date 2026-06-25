@@ -1,0 +1,1847 @@
+import streamlit as st
+import pandas as pd
+import os
+import datetime
+import re
+import hashlib
+import base64
+import io
+import time
+import uuid
+import html
+import textwrap
+import streamlit.components.v1 as components
+from core1_main import Core1Orchestrator
+from core2_main import Core2Orchestrator
+from report_generator import ReportGenerator
+from data_validator import DataValidator
+from scenario_summary import amount_for_direction, build_scenario_account_totals
+from sampling_scenario import build_sampling_scenario_table
+from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
+from mm03_parser import mm03_records_to_dataframe_rows, parse_mm03_ocr_text
+from dotenv import load_dotenv
+
+load_dotenv()
+DEFAULT_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+
+# KPMG Heritage Branding Colors
+KPMG_BLUE = "#00338D"
+KPMG_TEAL = "#00A3A1"
+KPMG_DARK_GREY = "#1A1A1A"
+KPMG_LIGHT_GREY = "#F7F9FC"
+SCENARIO_PREVIEW_SCHEMA_VERSION = 14
+SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
+AUTO_SCENARIO_LABEL = "自动识别"
+
+# Generate custom KPMG Favicon
+fav_svg = f"""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <rect width="100" height="100" fill="{KPMG_BLUE}"/>
+    <text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold" font-size="70" fill="white">AC</text>
+</svg>
+"""
+fav_b64 = base64.b64encode(fav_svg.encode()).decode()
+
+st.set_page_config(
+    page_title="KPMG SAP 自动分录审计分析平台",
+    page_icon=f"data:image/svg+xml;base64,{fav_b64}",
+    layout="wide",
+)
+
+# --- CACHING ENGINES ---
+@st.cache_resource
+def get_ocr_engine():
+    from ocr_processor import OCRProcessor
+    return OCRProcessor()
+
+# Custom KPMG Styling - Forced Professional Contrast (Dark Mode Compatibility)
+st.markdown(f"""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap');
+    
+    html, body, [class*="css"], .stApp {{
+        font-family: 'Open Sans', sans-serif !important;
+        font-size: 16px !important;
+        color: {KPMG_DARK_GREY} !important;
+        background-color: {KPMG_LIGHT_GREY} !important;
+    }}
+    
+    /* Full Screen Width with Consistent Alignment Padding */
+    .main .block-container {{
+        max-width: 100% !important;
+        padding: 2rem 3rem !important;
+    }}
+    
+    [data-testid="stAppViewBlockContainer"] {{
+        max-width: 100% !important;
+        padding: 2rem 3rem !important;
+    }}
+
+    [data-testid="stHeader"] {{
+        display: none !important;
+    }}
+    
+    footer {{
+        display: none !important;
+    }}
+
+    /* Remove top padding for the first element */
+    [data-testid="stAppViewContainer"] {{
+        padding: 0px !important;
+    }}
+
+    
+    [data-testid="stSidebar"] {{
+        background-color: {KPMG_BLUE} !important;
+        padding-top: 0.1rem !important;
+    }}
+    [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stText, [data-testid="stSidebar"] p {{
+        color: white !important;
+        font-size: 15px !important;
+        font-weight: 600 !important;
+    }}
+    
+    .logo-container {{
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        margin-bottom: 0.5rem;
+        margin-top: 0.5rem;
+    }}
+    .massive-logo {{
+        width: 320px !important;
+        display: block;
+        margin: 0 auto;
+    }}
+
+    .audit-card {{
+        background-color: white !important;
+        padding: 2.5rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        border-top: 6px solid {KPMG_BLUE};
+        margin-bottom: 2rem;
+        color: {KPMG_DARK_GREY} !important;
+    }}
+    
+    .stButton>button {{
+        background-color: {KPMG_BLUE} !important;
+        color: white !important;
+        border-radius: 8px !important;
+        border: none !important;
+        padding: 0.8rem 2.5rem !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1px !important;
+        transition: all 0.3s ease !important;
+        display: block;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        min-height: 3.4rem !important;
+    }}
+    .stButton>button:hover {{ 
+        background-color: {KPMG_TEAL} !important; 
+        box-shadow: 0 4px 15px rgba(0,51,141,0.3) !important;
+    }}
+    
+    h1 {{ color: {KPMG_BLUE} !important; font-size: 38px !important; font-weight: 800 !important; margin-bottom: 0px !important;}}
+    .sub-caption {{ color: {KPMG_DARK_GREY} !important; font-size: 22px; font-weight: 500; margin-top: 5px !important; }}
+    h2, h3 {{ color: {KPMG_BLUE} !important; font-size: 26px !important; font-weight: 700 !important; border-bottom: 2px solid {KPMG_TEAL}; padding-bottom: 12px; }}
+    
+    label p {{ color: {KPMG_DARK_GREY} !important; font-weight: 600 !important; }}
+    
+    .sidebar-footer {{
+        position: fixed;
+        bottom: 25px;
+        left: 20px;
+        color: rgba(255,255,255,0.8) !important;
+        font-size: 14px !important;
+        font-weight: 400 !important;
+    }}
+    
+    .stAlert {{ background-color: white !important; color: {KPMG_DARK_GREY} !important; }}
+
+    /* Universal Centering for Spinner and Status Text */
+    [data-testid="stSpinner"], [data-testid="stStatusWidget"] {{
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        width: 100% !important;
+        margin-top: 1.5rem !important;
+        margin-bottom: 1.5rem !important;
+        text-align: center !important;
+    }}
+    [data-testid="stSpinner"] > div, [data-testid="stStatusWidget"] > div {{
+        width: auto !important;
+        text-align: center !important;
+        font-size: 1.1rem !important;
+        font-weight: 600 !important;
+        color: {KPMG_BLUE} !important;
+    }}
+
+    /* Vertical Centering for Toolbar Elements */
+    [data-testid="stSelectbox"] {{
+        margin-top: -12px !important; /* Counter-act default invisible label space */
+        margin-bottom: 0px !important;
+    }}
+    
+    div[data-testid="column"]:nth-of-type(1) {{
+        display: flex !important;
+        align-items: center !important;
+        height: 40px !important; /* Set a fixed height to align with selectbox */
+    }}
+
+    /* Forceful Header Typography */
+    .kpmg-main-title {{
+        color: #FFFFFF !important;
+        font-size: 25px !important;
+        font-weight: 700 !important;
+        line-height: 1.2 !important;
+        display: block !important;
+        margin-bottom: 4px !important;
+        font-family: 'Open Sans', sans-serif !important;
+    }}
+
+    .kpmg-sub-title {{
+        color: #FFFFFF !important;
+        font-size: 17px !important;
+        font-weight: 400 !important;
+        line-height: 1.2 !important;
+        display: block !important;
+        margin: 0 !important;
+        opacity: 0.9 !important;
+        font-family: 'Open Sans', sans-serif !important;
+    }}
+    
+    /* Enforce Logo Dimensions */
+    img.kpmg-header-logo {{
+        height: 65px !important;
+        min-height: 65px !important;
+        max-height: 65px !important;
+        width: auto !important;
+        margin-right: 35px !important;
+        transform: translateY(-2px) !important;
+        display: block !important;
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
+# Helper for logo
+def get_base64_image(image_path):
+    try:
+        if os.path.exists(image_path):
+            with open(image_path, "rb") as f: data = f.read()
+            return base64.b64encode(data).decode()
+    except: pass
+    return None
+
+# --- SESSION INITIALIZATION ---
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+if "current_step" not in st.session_state: st.session_state.current_step = 1
+if "audit_context" not in st.session_state: st.session_state.audit_context = {}
+if "ocr_samples" not in st.session_state: st.session_state.ocr_samples = []
+if "ocr_samples_editor_nonce" not in st.session_state: st.session_state.ocr_samples_editor_nonce = 0
+if "sample_table_records" not in st.session_state: st.session_state.sample_table_records = []
+if "sample_table_signature" not in st.session_state: st.session_state.sample_table_signature = None
+if "sample_source_scenarios" not in st.session_state: st.session_state.sample_source_scenarios = {}
+if "processed_image_names" not in st.session_state: st.session_state.processed_image_names = set()
+if "results" not in st.session_state: st.session_state.results = None
+if "api_key_valid" not in st.session_state: st.session_state.api_key_valid = False
+if "api_check_done" not in st.session_state: st.session_state.api_check_done = False
+if "show_balloons" not in st.session_state: st.session_state.show_balloons = False
+if "ocr_busy" not in st.session_state: st.session_state.ocr_busy = False
+if "base_files_ready" not in st.session_state: st.session_state.base_files_ready = False
+if "base_file_signature" not in st.session_state: st.session_state.base_file_signature = None
+if "trial_balance_ready" not in st.session_state: st.session_state.trial_balance_ready = False
+if "trial_balance_signature" not in st.session_state: st.session_state.trial_balance_signature = None
+if "t001k_ready" not in st.session_state: st.session_state.t001k_ready = False
+if "t001k_signature" not in st.session_state: st.session_state.t001k_signature = None
+if "mm03_image_names" not in st.session_state: st.session_state.mm03_image_names = []
+if "mm03_records" not in st.session_state: st.session_state.mm03_records = []
+if "mm03_signature" not in st.session_state: st.session_state.mm03_signature = None
+if "scenario_preview" not in st.session_state: st.session_state.scenario_preview = []
+if "scenario_preview_schema_version" not in st.session_state: st.session_state.scenario_preview_schema_version = None
+if "scroll_to_top" not in st.session_state: st.session_state.scroll_to_top = False
+
+def current_system_version():
+    return st.session_state.audit_context.get("system_version") or st.session_state.audit_context.get("system_name") or "SAP S/4 HANA"
+
+def is_s4_system():
+    return "S/4" in current_system_version()
+
+def go_to_step(step):
+    st.session_state.current_step = step
+    st.session_state.scroll_to_top = True
+    st.rerun()
+
+def render_scroll_to_top():
+    if not st.session_state.get("scroll_to_top"):
+        return
+    st.session_state.scroll_to_top = False
+    components.html(
+        """
+        <input
+            id="scroll-focus-target"
+            aria-hidden="true"
+            autofocus
+            style="width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;"
+        />
+        <script>
+        const focusTarget = document.getElementById("scroll-focus-target");
+        const scrollTop = () => {
+            try {
+                window.focus();
+                focusTarget.focus({ preventScroll: false });
+                focusTarget.scrollIntoView({ block: "start", inline: "nearest" });
+            } catch (err) {}
+            try {
+                window.parent.scrollTo({ top: 0, left: 0, behavior: "auto" });
+                const doc = window.parent.document;
+                const targets = [
+                    doc.scrollingElement,
+                    doc.documentElement,
+                    doc.body,
+                    doc.querySelector('[data-testid="stAppViewContainer"]'),
+                    doc.querySelector('[data-testid="stAppViewBlockContainer"]'),
+                    doc.querySelector('section.main'),
+                    doc.querySelector('.main')
+                ];
+                targets.forEach((target) => {
+                    if (target) {
+                        target.scrollTop = 0;
+                        target.scrollLeft = 0;
+                    }
+                });
+            } catch (err) {}
+        };
+        scrollTop();
+        window.requestAnimationFrame(scrollTop);
+        [50, 150, 300, 600, 1000, 1500, 2500].forEach((delay) => window.setTimeout(scrollTop, delay));
+        </script>
+        """,
+        height=1,
+        width=1,
+    )
+
+render_scroll_to_top()
+
+# Background API Validation
+if not st.session_state.api_check_done:
+    if DEFAULT_KEY:
+        from llm_client import LLMClient
+        temp_client = LLMClient(api_key=DEFAULT_KEY)
+        is_ok, msg = temp_client.validate_api_key()
+        st.session_state.api_key_valid = is_ok
+        st.session_state.api_check_done = True
+        if is_ok: 
+            st.toast("🚀 KPMG AI Engine: DeepSeek API 已成功接入", icon="✅")
+        else: 
+            st.error(f"❌ AI 引擎校验失败 (Key: {DEFAULT_KEY[:6]}...): {msg}")
+    else:
+        st.session_state.api_key_valid = False
+        st.session_state.api_check_done = True
+        st.info("ℹ️ 系统正处于 Mock Mode (未检测到内置 API Key)")
+
+# Isolated Data Directory
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SESSION_DATA_DIR = os.path.join(BASE_DIR, "data", "sessions", st.session_state.session_id)
+if not os.path.exists(SESSION_DATA_DIR):
+    os.makedirs(SESSION_DATA_DIR, exist_ok=True)
+
+def upload_signature(*files):
+    flat_files = []
+    for item in files:
+        if item is None:
+            continue
+        if isinstance(item, (list, tuple)):
+            flat_files.extend(f for f in item if f is not None)
+        else:
+            flat_files.append(item)
+    return tuple((f.name, getattr(f, "size", None)) for f in flat_files)
+
+def validate_upload_to_session(uploaded_file, file_type):
+    is_valid, msg, df = DataValidator.validate_file(uploaded_file, file_type)
+    if is_valid:
+        df.to_csv(os.path.join(SESSION_DATA_DIR, f"{file_type}.csv"), index=False, encoding="utf-8-sig")
+    return is_valid, msg
+
+def validate_uploads_to_session(uploaded_files, file_type):
+    files = [f for f in (uploaded_files or []) if f is not None]
+    if not files:
+        return False, "未选择文件。", 0
+
+    frames = []
+    for uploaded_file in files:
+        is_valid, msg, df = DataValidator.validate_file(uploaded_file, file_type)
+        if not is_valid:
+            return False, f"{uploaded_file.name}: {msg}", 0
+        frames.append(df)
+
+    combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    combined.to_csv(os.path.join(SESSION_DATA_DIR, f"{file_type}.csv"), index=False, encoding="utf-8-sig")
+    return True, "验证通过", len(files)
+
+def load_session_table(file_type):
+    path = os.path.join(SESSION_DATA_DIR, f"{file_type}.csv")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, dtype=str, keep_default_na=False)
+    except Exception:
+        return pd.DataFrame()
+
+def dataframe_to_excel_bytes(df, sheet_name="Sheet1"):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    return output.getvalue()
+
+def save_uploaded_images(files, folder_name):
+    target_dir = os.path.join(SESSION_DATA_DIR, folder_name)
+    os.makedirs(target_dir, exist_ok=True)
+    saved_names = []
+    used_names = set()
+    for uploaded in files or []:
+        data = uploaded.getvalue()
+        original_name = os.path.basename(uploaded.name)
+        stem, ext = os.path.splitext(original_name)
+        safe_stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._") or "image"
+        safe_ext = re.sub(r"[^A-Za-z0-9.]+", "", ext.lower()) or ".png"
+        digest = hashlib.sha1(data + original_name.encode("utf-8", errors="ignore")).hexdigest()[:8]
+        safe_name = f"{safe_stem}_{digest}{safe_ext}"
+        counter = 2
+        while safe_name in used_names:
+            safe_name = f"{safe_stem}_{digest}_{counter}{safe_ext}"
+            counter += 1
+        used_names.add(safe_name)
+        with open(os.path.join(target_dir, safe_name), "wb") as f:
+            f.write(data)
+        saved_names.append(safe_name)
+    return saved_names
+
+def refresh_scenario_preview():
+    ranked = Core1Orchestrator(SESSION_DATA_DIR).run()
+    st.session_state.scenario_preview = ranked
+    st.session_state.scenario_preview_schema_version = SCENARIO_PREVIEW_SCHEMA_VERSION
+    return ranked
+
+def scenario_preview_needs_refresh():
+    if not st.session_state.base_files_ready:
+        return False
+    if not os.path.exists(os.path.join(SESSION_DATA_DIR, "T030.csv")):
+        return False
+    if not os.path.exists(os.path.join(SESSION_DATA_DIR, "SKAT.csv")):
+        return False
+    if st.session_state.scenario_preview_schema_version != SCENARIO_PREVIEW_SCHEMA_VERSION:
+        return True
+    if st.session_state.trial_balance_ready:
+        for result in st.session_state.scenario_preview:
+            for item in result.get("company_values", []):
+                if float(item.get("total_value", 0) or 0) and "account_values" not in item:
+                    return True
+    return False
+
+def ensure_scenario_preview_current():
+    if scenario_preview_needs_refresh():
+        refresh_scenario_preview()
+
+def clean_account_code(val):
+    if pd.isna(val):
+        return ""
+    text = str(val).strip().split(".")[0]
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return ""
+    return text.lstrip("0") if text != "0" else "0"
+
+def scenario_names_from_preview():
+    return [str(row.get("name")) for row in st.session_state.scenario_preview if row.get("name")]
+
+def scenario_account_lookup(ranked):
+    lookup = {}
+    for scenario in ranked or []:
+        name = str(scenario.get("name", ""))
+        if not name:
+            continue
+        accounts = set()
+        for account in scenario.get("raw_accounts", []):
+            code = clean_account_code(account)
+            if code:
+                accounts.add(code)
+        if not accounts:
+            for account in scenario.get("accounts", []):
+                code = clean_account_code(str(account).split(" ")[0])
+                if code:
+                    accounts.add(code)
+        lookup[name] = accounts
+    return lookup
+
+def infer_scenario_for_records(records, ranked):
+    sample_accounts = {
+        clean_account_code(record.get("SAKNR"))
+        for record in records or []
+        if clean_account_code(record.get("SAKNR"))
+    }
+    if not sample_accounts:
+        return AUTO_SCENARIO_LABEL
+    candidates = [
+        name
+        for name, accounts in scenario_account_lookup(ranked).items()
+        if accounts.intersection(sample_accounts)
+    ]
+    return candidates[0] if len(candidates) == 1 else AUTO_SCENARIO_LABEL
+
+def apply_scenario_to_records(records, selected_scenario, ranked):
+    if not records:
+        return []
+    enriched = [dict(record) for record in records]
+    if selected_scenario and selected_scenario != AUTO_SCENARIO_LABEL:
+        for record in enriched:
+            record["SCENARIO"] = selected_scenario
+        return enriched
+
+    by_doc = {}
+    for record in enriched:
+        by_doc.setdefault(str(record.get("DOC_NUM", "")), []).append(record)
+    for rows in by_doc.values():
+        inferred = infer_scenario_for_records(rows, ranked)
+        for record in rows:
+            if not record.get("SCENARIO"):
+                record["SCENARIO"] = inferred
+    return enriched
+
+def apply_scenario_to_dataframe(df, selected_scenario, ranked):
+    result = df.copy()
+    result.columns = [str(col).strip().upper() for col in result.columns]
+    if "SCENARIO" not in result.columns:
+        result["SCENARIO"] = ""
+    if selected_scenario and selected_scenario != AUTO_SCENARIO_LABEL:
+        result["SCENARIO"] = selected_scenario
+        return result
+
+    records = apply_scenario_to_records(result.to_dict("records"), AUTO_SCENARIO_LABEL, ranked)
+    return pd.DataFrame(records)
+
+def normalize_sample_preview_records(records, source_type="", source_file=""):
+    normalized = []
+    for record in records or []:
+        item = {str(k).strip().upper(): v for k, v in dict(record).items()}
+        item["SCENARIO"] = str(item.get("SCENARIO", "") or "").strip()
+        item["DOC_NUM"] = item.get("DOC_NUM", "")
+        item["DATE"] = item.get("DATE", "")
+        item["SAKNR"] = item.get("SAKNR", "")
+        item["TXT50"] = item.get("TXT50", "")
+        item["MATNR"] = item.get("MATNR", "")
+        item["AMOUNT"] = item.get("AMOUNT", "")
+        item["SHKZG"] = item.get("SHKZG", "")
+        item["SOURCE_TYPE"] = item.get("SOURCE_TYPE", source_type)
+        item["SOURCE_FILE"] = item.get("SOURCE_FILE", source_file)
+        normalized.append(item)
+    return normalized
+
+def editor_text_value(value):
+    if pd.isna(value):
+        return ""
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return ""
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+def prepare_sample_editor_dataframe(records, scenario_options, preferred_columns):
+    df = pd.DataFrame(records or [])
+    for col in preferred_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    allowed_scenarios = set(scenario_options or [])
+    df["SCENARIO"] = df["SCENARIO"].map(editor_text_value).apply(
+        lambda value: value if value in allowed_scenarios else ""
+    )
+    for col in df.columns:
+        if col != "SCENARIO":
+            df[col] = df[col].map(editor_text_value)
+
+    remaining_columns = [col for col in df.columns if col not in preferred_columns]
+    return df[preferred_columns + remaining_columns]
+
+def sample_source_key(source_type, source_file):
+    return f"{str(source_type or '').strip()}::{str(source_file or '').strip()}"
+
+def sample_source_groups(records):
+    groups = {}
+    for record in records or []:
+        source_type = str(record.get("SOURCE_TYPE", "") or "").strip()
+        source_file = str(record.get("SOURCE_FILE", "") or "").strip()
+        key = sample_source_key(source_type, source_file)
+        if key == "::":
+            continue
+        groups.setdefault(key, {
+            "source_type": source_type or "样本",
+            "source_file": source_file or "未命名来源",
+            "records": [],
+        })["records"].append(record)
+    return groups
+
+def infer_source_scenario(records, scenario_options):
+    allowed = set(scenario_options or [])
+    values = {
+        str(record.get("SCENARIO", "") or "").strip()
+        for record in records or []
+        if str(record.get("SCENARIO", "") or "").strip() in allowed
+    }
+    return next(iter(values)) if len(values) == 1 else ""
+
+def apply_source_scenarios(records, source_scenarios):
+    updated = []
+    for record in records or []:
+        item = dict(record)
+        key = sample_source_key(item.get("SOURCE_TYPE"), item.get("SOURCE_FILE"))
+        scenario = str((source_scenarios or {}).get(key, "") or "").strip()
+        if scenario:
+            item["SCENARIO"] = scenario
+        updated.append(item)
+    return updated
+
+def sync_source_scenarios_from_records(records, scenario_options):
+    groups = sample_source_groups(records)
+    current_keys = set(groups)
+    st.session_state.sample_source_scenarios = {
+        key: value
+        for key, value in st.session_state.sample_source_scenarios.items()
+        if key in current_keys
+    }
+    for key, info in groups.items():
+        scenario = infer_source_scenario(info["records"], scenario_options)
+        if scenario:
+            st.session_state.sample_source_scenarios[key] = scenario
+
+def render_sample_source_scenario_controls(records, scenario_options):
+    groups = sample_source_groups(records)
+    if not groups:
+        return
+
+    current_keys = set(groups)
+    st.session_state.sample_source_scenarios = {
+        key: value
+        for key, value in st.session_state.sample_source_scenarios.items()
+        if key in current_keys
+    }
+
+    st.write("**按上传文件指定审计场景**")
+    st.caption("每个样本清单或凭证截图单独选择一个场景；选择后会自动填充该来源下的所有样本行，下方预览表仍可逐行微调。")
+    placeholder = "请选择场景"
+    columns = st.columns(min(3, max(1, len(groups))))
+    changed = False
+    for idx, (key, info) in enumerate(sorted(groups.items(), key=lambda item: item[1]["source_file"])):
+        existing = st.session_state.sample_source_scenarios.get(key) or infer_source_scenario(info["records"], scenario_options)
+        options = [placeholder] + list(scenario_options)
+        index = options.index(existing) if existing in options else 0
+        digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
+        with columns[idx % len(columns)]:
+            selected = st.selectbox(
+                f"{info['source_file']} ({info['source_type']}, {len(info['records'])} 行)",
+                options,
+                index=index,
+                key=f"sample_source_scenario_{digest}",
+            )
+        value = "" if selected == placeholder else selected
+        if st.session_state.sample_source_scenarios.get(key, "") != value:
+            st.session_state.sample_source_scenarios[key] = value
+            changed = True
+
+    if changed:
+        st.session_state.sample_table_records = apply_source_scenarios(
+            st.session_state.sample_table_records,
+            st.session_state.sample_source_scenarios,
+        )
+        st.session_state.ocr_samples = apply_source_scenarios(
+            st.session_state.ocr_samples,
+            st.session_state.sample_source_scenarios,
+        )
+        st.session_state.ocr_samples_editor_nonce += 1
+
+def split_sample_preview_records(records):
+    table_records = []
+    image_records = []
+    for record in records or []:
+        item = dict(record)
+        source_type = str(item.get("SOURCE_TYPE", "")).strip()
+        if source_type == "样本清单":
+            table_records.append(item)
+        else:
+            image_records.append(item)
+    return table_records, image_records
+
+def valid_sample_scenarios(records, scenario_options):
+    allowed = set(scenario_options or [])
+    invalid = []
+    for idx, record in enumerate(records or [], start=1):
+        scenario = str(record.get("SCENARIO", "")).strip()
+        if scenario not in allowed:
+            invalid.append(idx)
+    return invalid
+
+def build_audit_dashboard_rows(ranked):
+    rows = []
+    for scenario in ranked or []:
+        scenario_name = str(scenario.get("name", "") or "").strip()
+        baseline_company = str(scenario.get("baseline_company_code", "") or "").strip()
+        for company in scenario.get("company_values", []) or []:
+            company_code = str(company.get("company_code", "未指定公司") or "未指定公司")
+            for account in company.get("account_values", []) or []:
+                debit_value = float(amount_for_direction(account, "借方") or 0)
+                credit_value = float(amount_for_direction(account, "贷方") or 0)
+                total_value = float(amount_for_direction(account, "全部") or 0)
+                if not (debit_value or credit_value or total_value):
+                    continue
+                rows.append({
+                    "审计场景": scenario_name,
+                    "公司代码": company_code,
+                    "科目编码": str(account.get("account", "") or "").strip(),
+                    "科目描述": str(account.get("description", "未知科目") or "未知科目").strip(),
+                    "借方金额": debit_value,
+                    "贷方金额": credit_value,
+                    "合计金额": total_value,
+                    "是否额外科目": "是" if account.get("is_extra") else "否",
+                    "基准公司": baseline_company,
+                })
+    return pd.DataFrame(rows)
+
+def render_general_audit_dashboard(ranked):
+    dashboard_df = build_audit_dashboard_rows(ranked)
+    if dashboard_df.empty:
+        st.info("上传余额表后，这里会展示按审计场景、公司和科目归集的财务影响分析。")
+        with st.expander("查看配置映射明细", expanded=True):
+            render_scenario_preview(ranked, show_amount=False)
+        return
+
+    st.markdown("### 审计价值 Dashboard")
+    st.caption("从财务审计视角查看 SAP 自动分录对业务场景、公司和财务科目的影响；需要追溯时再展开底层配置与明细。")
+
+    total_amount = float(dashboard_df["合计金额"].sum())
+    scenario_count = int(dashboard_df["审计场景"].nunique())
+    company_count = int(dashboard_df["公司代码"].nunique())
+    account_count = int(dashboard_df["科目编码"].nunique())
+    extra_count = int((dashboard_df["是否额外科目"] == "是").sum())
+
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("覆盖审计场景", f"{scenario_count}")
+    metric_cols[1].metric("涉及公司", f"{company_count}")
+    metric_cols[2].metric("命中科目", f"{account_count}")
+    metric_cols[3].metric("归集金额", f"{total_amount:,.2f}")
+    metric_cols[4].metric("额外科目记录", f"{extra_count}")
+
+    scenario_totals = (
+        dashboard_df.groupby("审计场景", as_index=False)["合计金额"]
+        .sum()
+        .sort_values("合计金额", ascending=False)
+    )
+    top_scenario = scenario_totals.iloc[0]
+    top_accounts = (
+        dashboard_df.groupby(["审计场景", "科目编码", "科目描述"], as_index=False)["合计金额"]
+        .sum()
+        .sort_values("合计金额", ascending=False)
+        .head(5)
+    )
+
+    st.info(
+        f"金额影响最大的场景是 **{top_scenario['审计场景']}**，归集金额 **{float(top_scenario['合计金额']):,.2f}**。"
+        " 下方可进一步筛选公司、科目和额外科目，定位需要抽样覆盖或重点复核的对象。"
+    )
+
+    filter_cols = st.columns([1.3, 1.3, 1, 1])
+    selected_scenarios = filter_cols[0].multiselect(
+        "审计场景",
+        sorted(dashboard_df["审计场景"].dropna().unique()),
+        default=[],
+        placeholder="全部场景",
+    )
+    selected_companies = filter_cols[1].multiselect(
+        "公司代码",
+        sorted(dashboard_df["公司代码"].dropna().unique()),
+        default=[],
+        placeholder="全部公司",
+    )
+    extra_only = filter_cols[2].checkbox("只看额外科目")
+    min_amount = filter_cols[3].number_input("金额阈值", min_value=0.0, value=0.0, step=10000.0)
+
+    filtered = dashboard_df.copy()
+    if selected_scenarios:
+        filtered = filtered[filtered["审计场景"].isin(selected_scenarios)]
+    if selected_companies:
+        filtered = filtered[filtered["公司代码"].isin(selected_companies)]
+    if extra_only:
+        filtered = filtered[filtered["是否额外科目"] == "是"]
+    if min_amount:
+        filtered = filtered[filtered["合计金额"].abs() >= float(min_amount)]
+
+    available_columns = [
+        "审计场景", "公司代码", "科目编码", "科目描述",
+        "合计金额", "借方金额", "贷方金额", "是否额外科目", "基准公司",
+    ]
+    default_columns = ["审计场景", "公司代码", "科目编码", "科目描述", "合计金额", "是否额外科目"]
+    selected_columns = st.multiselect("显示字段", available_columns, default=default_columns)
+    if not selected_columns:
+        selected_columns = default_columns
+
+    chart_cols = st.columns([1.2, 1])
+    with chart_cols[0]:
+        st.markdown("**场景金额排行**")
+        st.bar_chart(scenario_totals.set_index("审计场景")["合计金额"])
+    with chart_cols[1]:
+        st.markdown("**重点科目贡献 Top 5**")
+        top_accounts["合计金额"] = top_accounts["合计金额"].map(lambda value: f"{float(value):,.2f}")
+        st.dataframe(top_accounts, width="stretch", hide_index=True)
+
+    st.markdown("**可筛选审计明细**")
+    display_df = filtered[selected_columns].copy()
+    for amount_col in ["合计金额", "借方金额", "贷方金额"]:
+        if amount_col in display_df.columns:
+            display_df[amount_col] = display_df[amount_col].map(lambda value: f"{float(value):,.2f}")
+    st.dataframe(display_df, width="stretch", hide_index=True)
+
+    with st.expander("技术明细：配置映射、公司维度金额和借贷拆分", expanded=False):
+        render_scenario_preview(ranked, show_amount=True)
+
+def render_scenario_preview(ranked, show_amount=False):
+    if not ranked:
+        st.warning("尚未识别到场景，请检查 T030 配置表。")
+        return
+
+    preview_df = pd.DataFrame(ranked)
+    preview_df["已匹配名称"] = preview_df["accounts"].apply(
+        lambda items: sum("未知科目" not in str(item) for item in items)
+    )
+    preview_df["未匹配名称"] = preview_df["accounts"].apply(
+        lambda items: sum("未知科目" in str(item) for item in items)
+    )
+    total_accounts = int(preview_df["已匹配名称"].sum() + preview_df["未匹配名称"].sum())
+    matched_accounts = int(preview_df["已匹配名称"].sum())
+
+    if show_amount:
+        direction_filter = "全部"
+
+        def account_chip(account, amount_value):
+            chip_class = "account-detail-chip account-extra-chip" if account.get("is_extra") else "account-detail-chip"
+            extra_badge = "<span class='extra-badge'>额外</span>" if account.get("is_extra") else ""
+            return (
+                f"<span class='{chip_class}'>"
+                f"<span class='account-code'>{html.escape(str(account.get('account', '')))}</span>"
+                f"<span class='account-desc'>{html.escape(str(account.get('description', '未知科目')))}</span>"
+                f"<span class='account-amount'>{float(amount_value or 0):,.2f}</span>"
+                f"{extra_badge}"
+                "</span>"
+            )
+
+        def summary_breakdown_for_row(summary_row):
+            scenario_name = str(summary_row.get("scenario", "")).strip()
+            account_code = str(summary_row.get("account", "")).strip()
+            company_amounts = {}
+
+            for result in ranked:
+                if str(result.get("name", "")).strip() != scenario_name:
+                    continue
+                for company in result.get("company_values", []) or []:
+                    company_code = str(company.get("company_code", "未指定公司"))
+                    for account in company.get("account_values", []) or []:
+                        if str(account.get("account", "")).strip() != account_code:
+                            continue
+                        debit_value = amount_for_direction(account, "借方")
+                        credit_value = amount_for_direction(account, "贷方")
+                        combined_value = amount_for_direction(account, "全部")
+                        if not (debit_value or credit_value or combined_value):
+                            continue
+                        company_amount = company_amounts.setdefault(company_code, {
+                            "company_code": company_code,
+                            "debit_value": 0.0,
+                            "credit_value": 0.0,
+                            "total_value": 0.0,
+                        })
+                        company_amount["debit_value"] += debit_value
+                        company_amount["credit_value"] += credit_value
+                        company_amount["total_value"] += combined_value
+
+            if company_amounts:
+                company_amount_list = sorted(
+                    company_amounts.values(),
+                    key=lambda item: (
+                        -float(item.get("total_value", 0) or 0),
+                        str(item.get("company_code", ""))
+                    )
+                )
+                return {
+                    "debit_value": sum(float(item.get("debit_value", 0) or 0) for item in company_amount_list),
+                    "credit_value": sum(float(item.get("credit_value", 0) or 0) for item in company_amount_list),
+                    "total_value": sum(float(item.get("total_value", 0) or 0) for item in company_amount_list),
+                    "company_amounts": company_amount_list,
+                }
+
+            return {
+                "debit_value": float(summary_row.get("debit_value", 0) or 0),
+                "credit_value": float(summary_row.get("credit_value", 0) or 0),
+                "total_value": float(summary_row.get("total_value", 0) or 0),
+                "company_amounts": summary_row.get("company_amounts", []) or [],
+            }
+
+        company_codes = set()
+        has_extra_accounts = False
+        for result in ranked:
+            for item in result.get("company_values", []):
+                company_code = str(item.get("company_code", "未指定公司"))
+                company_codes.add(company_code)
+                if any(account.get("is_extra") for account in item.get("account_values", [])):
+                    has_extra_accounts = True
+        company_codes = sorted(company_codes)
+
+        if not company_codes:
+            st.info("余额表最后期间未命中任何已关联场景科目，场景金额暂为 0。")
+            return
+
+        summary_rows = []
+        for row in build_scenario_account_totals(ranked, direction_filter=direction_filter):
+            extra_note = (
+                f"<span class='summary-extra-note'>{int(row.get('extra_company_count', 0))} 家含额外科目</span>"
+                if int(row.get("extra_company_count", 0) or 0) else ""
+            )
+            company_codes_text = "、".join(str(code) for code in row.get("company_codes", []))
+            breakdown = summary_breakdown_for_row(row)
+            company_amount_rows = []
+            for company_amount in breakdown.get("company_amounts", []):
+                company_amount_rows.append(
+                    "<tr>"
+                    f"<td>{html.escape(str(company_amount.get('company_code', '未指定公司')))}</td>"
+                    f"<td class='amount'>{float(company_amount.get('debit_value', 0) or 0):,.2f}</td>"
+                    f"<td class='amount'>{float(company_amount.get('credit_value', 0) or 0):,.2f}</td>"
+                    f"<td class='amount'>{float(company_amount.get('total_value', 0) or 0):,.2f}</td>"
+                    "</tr>"
+                )
+            company_amount_html = "".join(company_amount_rows) or (
+                "<tr><td colspan='4' class='empty-cell'>暂无公司金额明细</td></tr>"
+            )
+            summary_rows.append(
+                "<details class='summary-account-row'>"
+                "<summary class='summary-row-grid'>"
+                f"<span class='scenario-name'>{html.escape(str(row.get('scenario', '')))}</span>"
+                f"<span class='summary-account-code'>{html.escape(str(row.get('account', '')))}</span>"
+                f"<span>{html.escape(str(row.get('description', '未知科目')))}</span>"
+                f"<span class='amount'>{float(row.get('total_value', 0) or 0):,.2f}</span>"
+                f"<span class='amount-share'>{float(row.get('amount_share_pct', 0) or 0):.2f}%</span>"
+                f"<span class='summary-company-count' title='{html.escape(company_codes_text)}'>{int(row.get('company_count', 0) or 0)}</span>"
+                f"<span>{extra_note}</span>"
+                "</summary>"
+                "<div class='summary-side-panel'>"
+                "<div class='side-metric-row'>"
+                f"<span>借方金额 <strong>{float(breakdown.get('debit_value', 0) or 0):,.2f}</strong></span>"
+                f"<span>贷方金额 <strong>{float(breakdown.get('credit_value', 0) or 0):,.2f}</strong></span>"
+                f"<span>借贷合计 <strong>{float(breakdown.get('total_value', 0) or 0):,.2f}</strong></span>"
+                "</div>"
+                "<table class='summary-side-table'>"
+                "<thead><tr><th>公司代码</th><th class='amount'>借方金额</th><th class='amount'>贷方金额</th><th class='amount'>合计金额</th></tr></thead>"
+                f"<tbody>{company_amount_html}</tbody>"
+                "</table>"
+                "</div>"
+                "</details>"
+            )
+        summary_html = ""
+        if summary_rows:
+            summary_html = (
+                "<section class='scenario-total-summary'>"
+                "<div class='summary-title'>场景科目总金额汇总 <span class='summary-subtitle'>点击科目行展开借贷明细</span></div>"
+                "<div class='summary-row-grid summary-header'>"
+                "<span>审计场景</span><span>科目编码</span><span>科目描述</span><span class='amount'>总金额</span><span class='amount-share'>占比</span><span>命中公司数</span><span>提示</span>"
+                "</div>"
+                f"<div class='summary-accordion'>{''.join(summary_rows)}</div>"
+                "</section>"
+            )
+
+        sections = []
+        for idx, company_code in enumerate(company_codes):
+            scenario_rows = []
+            for result in ranked:
+                company_item = next(
+                    (item for item in result.get("company_values", []) if str(item.get("company_code", "未指定公司")) == company_code),
+                    None
+                )
+                all_account_values = company_item.get("account_values", []) if company_item else []
+                account_values = [
+                    (account, amount_value)
+                    for account in all_account_values
+                    for amount_value in [amount_for_direction(account, direction_filter)]
+                    if amount_value
+                ]
+                scenario_amount = sum(float(amount_value or 0) for _, amount_value in account_values)
+                if account_values:
+                    account_html = "".join(
+                        account_chip(account, amount_value)
+                        for account, amount_value in account_values
+                    )
+                else:
+                    account_html = "<span class='empty-cell'>该公司最后期间未命中此场景科目</span>"
+                baseline_company_code = result.get("baseline_company_code")
+                baseline_html = (
+                    f"<span class='baseline-pill'>基准公司：{html.escape(str(baseline_company_code))}</span>"
+                    if baseline_company_code else ""
+                )
+                scenario_rows.append(
+                    "<tr>"
+                    f"<td class='scenario-name'>{html.escape(str(result.get('name', '')))}{baseline_html}</td>"
+                    f"<td class='amount'>{scenario_amount:,.2f}</td>"
+                    f"<td class='accounts-cell'>{account_html}</td>"
+                    "</tr>"
+                )
+            sections.append(
+                f"<details class='company-scenario-section' {'open' if idx == 0 else ''}>"
+                "<summary>"
+                f"<span>公司代码 {html.escape(company_code)}</span>"
+                "</summary>"
+                "<table class='company-scenario-table'>"
+                "<thead><tr><th>审计场景</th><th class='amount'>场景金额</th><th>金额归集科目 / 科目描述 / 金额</th></tr></thead>"
+                f"<tbody>{''.join(scenario_rows)}</tbody>"
+                "</table>"
+                "</details>"
+            )
+
+        legend_html = (
+            "<div class='scenario-baseline-legend'>"
+            "<span class='legend-swatch'></span>"
+            "高亮 = 相比该场景基准公司多出的实际命中科目"
+            "</div>"
+            if has_extra_accounts else ""
+        )
+
+        table_html = textwrap.dedent(f"""
+            <style>
+            .company-scenario-preview {{
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+            }}
+            .company-scenario-section {{
+                border: 1px solid #d8dde6;
+                border-radius: 8px;
+                background: #fff;
+                overflow: hidden;
+            }}
+            .scenario-total-summary {{
+                border: 1px solid #d8dde6;
+                border-radius: 8px;
+                background: #fff;
+                overflow: hidden;
+            }}
+            .summary-title {{
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 12px 14px;
+                background: #eef7f7;
+                color: #00338d;
+                font-weight: 800;
+                border-bottom: 1px solid #d8dde6;
+            }}
+            .summary-subtitle {{
+                color: #607085;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            .summary-row-grid {{
+                display: grid;
+                grid-template-columns: minmax(150px, 1.1fr) minmax(130px, .9fr) minmax(260px, 2.2fr) minmax(140px, .9fr) minmax(90px, .6fr) minmax(100px, .7fr) minmax(120px, .8fr);
+                align-items: center;
+                gap: 0;
+                min-width: 1080px;
+            }}
+            .summary-header {{
+                color: #4d5a6a;
+                background: #fbfcfe;
+                font-size: 14px;
+                font-weight: 600;
+                border-bottom: 1px solid #e7eaf0;
+            }}
+            .summary-header span,
+            .summary-account-row summary span {{
+                padding: 9px 12px;
+                border-right: 1px solid #e7eaf0;
+            }}
+            .summary-header span:last-child,
+            .summary-account-row summary span:last-child {{
+                border-right: 0;
+            }}
+            .summary-accordion {{
+                overflow-x: auto;
+            }}
+            .summary-account-row {{
+                border-bottom: 1px solid #e7eaf0;
+                font-size: 14px;
+            }}
+            .summary-account-row:last-child {{
+                border-bottom: 0;
+            }}
+            .summary-account-row summary {{
+                cursor: pointer;
+                list-style: none;
+                background: #fff;
+                position: relative;
+            }}
+            .summary-account-row summary::-webkit-details-marker {{
+                display: none;
+            }}
+            .summary-account-row summary:hover {{
+                background: #f7fbff;
+            }}
+            .summary-account-row summary::before {{
+                content: "▸";
+                position: absolute;
+                margin: 9px 0 0 2px;
+                color: #00338d;
+                font-weight: 800;
+            }}
+            .summary-account-row[open] summary::before {{
+                content: "▾";
+            }}
+            .summary-account-row summary .scenario-name {{
+                padding-left: 26px;
+            }}
+            .summary-side-panel {{
+                background: #f8fbff;
+                border-top: 1px solid #e7eaf0;
+                padding: 12px 18px 14px 18px;
+            }}
+            .side-metric-row {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-bottom: 10px;
+            }}
+            .side-metric-row span {{
+                border: 1px solid #d8dde6;
+                border-radius: 999px;
+                background: #fff;
+                color: #4d5a6a;
+                padding: 5px 10px;
+            }}
+            .side-metric-row strong {{
+                color: #00338d;
+                margin-left: 6px;
+            }}
+            .summary-side-table {{
+                width: 100%;
+                border-collapse: collapse;
+                background: #fff;
+                font-size: 13px;
+            }}
+            .summary-side-table th,
+            .summary-side-table td {{
+                border: 1px solid #e7eaf0;
+                padding: 7px 9px;
+                text-align: left;
+            }}
+            .summary-side-table th {{
+                background: #fbfcfe;
+                color: #4d5a6a;
+                font-weight: 700;
+            }}
+            .summary-account-code {{
+                color: #00338d;
+                font-weight: 800;
+                white-space: nowrap;
+            }}
+            .summary-company-count {{
+                text-align: right;
+                white-space: nowrap;
+            }}
+            .summary-row-grid .amount,
+            .summary-row-grid .amount-share,
+            .summary-side-table .amount {{
+                text-align: right;
+                white-space: nowrap;
+            }}
+            .summary-extra-note {{
+                display: inline-block;
+                border-radius: 999px;
+                background: #fff4db;
+                border: 1px solid #f0b64a;
+                color: #8a5200;
+                padding: 1px 8px;
+                font-size: 12px;
+                font-weight: 700;
+                white-space: nowrap;
+            }}
+            .company-scenario-section summary {{
+                cursor: pointer;
+                padding: 12px 14px;
+                background: #f7f9fc;
+                color: #00338d;
+                font-weight: 700;
+            }}
+            .company-scenario-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+            }}
+            .company-scenario-table th,
+            .company-scenario-table td {{
+                border-top: 1px solid #e7eaf0;
+                border-right: 1px solid #e7eaf0;
+                padding: 10px 12px;
+                text-align: left;
+                vertical-align: top;
+            }}
+            .company-scenario-table th {{
+                color: #4d5a6a;
+                background: #fbfcfe;
+                font-weight: 600;
+            }}
+            .company-scenario-table th:last-child,
+            .company-scenario-table td:last-child {{
+                border-right: 0;
+            }}
+            .company-scenario-table .scenario-name {{
+                width: 14%;
+                min-width: 110px;
+                color: #1a1a1a;
+                font-weight: 600;
+            }}
+            .baseline-pill {{
+                display: block;
+                margin-top: 4px;
+                color: #006b6b;
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1.4;
+            }}
+            .company-scenario-table .amount {{
+                width: 12%;
+                min-width: 130px;
+                text-align: right;
+                white-space: nowrap;
+            }}
+            .company-scenario-table .accounts-cell {{
+                white-space: normal;
+                line-height: 1.9;
+            }}
+            .account-detail-chip {{
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                margin: 2px 6px 2px 0;
+                padding: 2px 8px;
+                max-width: 100%;
+                border-radius: 999px;
+                background: #f1f4f9;
+                color: #53627a;
+                flex-wrap: wrap;
+            }}
+            .account-detail-chip .account-code {{
+                color: #00338d;
+                font-weight: 700;
+            }}
+            .account-detail-chip .account-desc {{
+                overflow-wrap: anywhere;
+            }}
+            .account-detail-chip .account-amount {{
+                color: #006b6b;
+                font-weight: 700;
+                white-space: nowrap;
+            }}
+            .account-extra-chip {{
+                background: #fff4db;
+                border: 1px solid #f0b64a;
+                color: #694700;
+            }}
+            .account-extra-chip .account-code,
+            .account-extra-chip .account-amount {{
+                color: #8a5200;
+            }}
+            .extra-badge {{
+                border-radius: 999px;
+                background: #d97900;
+                color: #fff;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 0 6px;
+                line-height: 1.5;
+            }}
+            .scenario-baseline-legend {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                width: fit-content;
+                padding: 6px 10px;
+                border-radius: 8px;
+                background: #fff8e8;
+                color: #6b4b00;
+                border: 1px solid #f0d088;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            .legend-swatch {{
+                display: inline-block;
+                width: 14px;
+                height: 14px;
+                border-radius: 999px;
+                background: #fff4db;
+                border: 1px solid #f0b64a;
+            }}
+            .empty-cell {{
+                color: #8a94a6;
+            }}
+            </style>
+            <div class="company-scenario-preview">
+                {legend_html}
+                {summary_html}
+                {''.join(sections)}
+            </div>
+            """).strip()
+        st.html(table_html)
+        if total_accounts and matched_accounts == 0:
+            st.warning("当前 T030 场景科目没有在 SKAT 中找到对应名称；请确认上传的是完整 SKAT，或在下一步上传余额表补充科目名称。")
+        return
+
+    rows = []
+    for _, row in preview_df.iterrows():
+        detail_items = row.get("account_details", []) or []
+        if detail_items:
+            account_chips = "".join(
+                "<span class='account-chip'>"
+                f"<span class='account-code'>{html.escape(str(detail.get('account', '')))}</span>"
+                f" ({html.escape(str(detail.get('description', '未知科目')))})"
+                + "</span>"
+                for detail in detail_items
+            )
+        else:
+            account_chips = "".join(
+                f"<span class='account-chip'>{html.escape(str(account))}</span>"
+                for account in row.get("accounts", [])
+            )
+        account_chips = account_chips or "<span class='empty-cell'>无关联科目</span>"
+        rows.append(
+            "<tr>"
+            f"<td class='scenario-name'>{html.escape(str(row.get('name', '')))}</td>"
+            f"<td class='count-cell'>{int(row.get('已匹配名称', 0))}</td>"
+            f"<td class='count-cell'>{int(row.get('未匹配名称', 0))}</td>"
+            f"<td class='accounts-cell'>{account_chips}</td>"
+            "</tr>"
+        )
+
+    table_html = textwrap.dedent(f"""
+        <style>
+        .scenario-preview-table {{
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            border: 1px solid #d8dde6;
+            border-radius: 8px;
+            overflow: hidden;
+            font-size: 14px;
+        }}
+        .scenario-preview-table th,
+        .scenario-preview-table td {{
+            border-bottom: 1px solid #e7eaf0;
+            border-right: 1px solid #e7eaf0;
+            padding: 10px 12px;
+            text-align: left;
+            vertical-align: top;
+        }}
+        .scenario-preview-table th {{
+            background: #f7f9fc;
+            color: #4d5a6a;
+            font-weight: 600;
+        }}
+        .scenario-preview-table tr:last-child td {{
+            border-bottom: 0;
+        }}
+        .scenario-preview-table th:last-child,
+        .scenario-preview-table td:last-child {{
+            border-right: 0;
+        }}
+        .scenario-preview-table .scenario-name {{
+            width: 15%;
+            min-width: 120px;
+            color: #1a1a1a;
+            font-weight: 600;
+        }}
+        .scenario-preview-table .amount {{
+            width: 12%;
+            min-width: 120px;
+            text-align: right;
+            white-space: nowrap;
+        }}
+        .scenario-preview-table .count-cell {{
+            width: 8%;
+            min-width: 82px;
+            text-align: right;
+            white-space: nowrap;
+        }}
+        .scenario-preview-table .accounts-cell {{
+            width: auto;
+            white-space: normal;
+            line-height: 1.9;
+        }}
+        .scenario-preview-table .account-chip {{
+            display: inline-block;
+            margin: 2px 5px 2px 0;
+            padding: 2px 8px;
+            max-width: 100%;
+            border-radius: 999px;
+            background: #f1f4f9;
+            color: #53627a;
+            overflow-wrap: anywhere;
+            white-space: normal;
+        }}
+        .scenario-preview-table .account-code {{
+            color: #00338d;
+            font-weight: 700;
+        }}
+        .scenario-preview-table .empty-cell {{
+            color: #8a94a6;
+        }}
+        </style>
+        <table class="scenario-preview-table">
+            <thead>
+                <tr>
+                    <th>审计场景</th>
+                    <th>已匹配名称</th>
+                    <th>未匹配名称</th>
+                    <th>关联科目</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows)}
+            </tbody>
+        </table>
+        """).strip()
+    st.html(table_html)
+    if total_accounts and matched_accounts == 0:
+        st.warning("当前 T030 场景科目没有在 SKAT 中找到对应名称；请确认上传的是完整 SKAT，或在下一步上传余额表补充科目名称。")
+
+# Main Header Area with Logo
+logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.png")
+# Note: Since sidebar is removed, we'll use a blue header bar or just the logo
+logo_b64 = get_base64_image(logo_path)
+
+header_html = f"""
+<div style="background-color: {KPMG_BLUE}; padding: 3rem 4rem; border-radius: 16px; margin: 0 0 2rem 0; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 8px 24px rgba(0,51,141,0.2);">
+    <div style="display: flex; align-items: center;">
+        <img src="data:image/png;base64,{logo_b64}" class="kpmg-header-logo">
+        <div style="display: flex; flex-direction: column; justify-content: center;">
+            <span class="kpmg-main-title">SAP 自动分录审计分析与底稿生成平台</span>
+            <span class="kpmg-sub-title">面向财务审计与 IT 审计的自动过账、科目归集和样本证据分析工具</span>
+        </div>
+    </div>
+    <div style="text-align: right; color: white;">
+        <div style="font-size: 14px; font-weight: 600; letter-spacing: 1px;">SYSTEM ONLINE</div>
+        <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">Session Tracking: {st.session_state.session_id[:12].upper()}</div>
+    </div>
+</div>
+"""
+st.markdown(header_html, unsafe_allow_html=True)
+
+# Model & Status Bar
+c1, c2 = st.columns([3, 1], vertical_alignment="center")
+with c1:
+    if st.session_state.api_key_valid:
+        st.success("🤖 已成功部署DeepSeek API")
+    else:
+        st.warning("⚠️ 基础分析模式 (Mock Mode)")
+with c2:
+    selected_model = st.selectbox("分析模型", ["deepseek-chat", "deepseek-reasoner"], label_visibility="collapsed")
+
+st.divider()
+
+# --- MAIN RENDER LOGIC ---
+if st.session_state.results:
+    if st.session_state.show_balloons:
+        st.balloons(); st.session_state.show_balloons = False
+    res = st.session_state.results
+    t1, t2, t3 = st.tabs(["📊 1. 审计影响总览", "📝 2. 样本证据叙述", "📥 3. 底稿成果下载"])
+    with t1:
+        st.subheader("SAP 自动分录对财务审计的影响")
+        if res["ranked"]:
+            render_general_audit_dashboard(res["ranked"])
+            st.write("---")
+            render_scenario_preview(res["ranked"], show_amount=True)
+    with t2:
+        st.subheader("TOD/TOE 样本证据描述")
+        di_items = res.get("di", [])
+        if di_items:
+            for it in di_items:
+                with st.expander(f"📌 {it['scenario']}"):
+                    st.info(it["di_description"]); st.write("**样本细节记录 (TOE):**"); st.json(it["sample_table"])
+        else:
+            st.info("未生成 TOD/TOE 描述：当前样本没有命中任何场景关联科目。请检查 OCR 结果或样本清单中的凭证号、科目编码和金额字段。")
+    with t3:
+        st.subheader("最终成果文件导出")
+        with open(res["report_path"], "rb") as f:
+            st.download_button(label="📥 下载最终 Excel 审计底稿", data=f.read(), file_name=f"ITAC_WP_{st.session_state.audit_context.get('entity_name','Audit')}.xlsx", width="stretch")
+        st.write("") 
+        if st.button("🔄 开启新的审计任务", width="stretch"):
+            st.session_state.session_id = str(uuid.uuid4())
+            st.session_state.current_step = 1
+            st.session_state.results = None
+            st.session_state.ocr_samples = []
+            st.session_state.sample_table_records = []
+            st.session_state.sample_table_signature = None
+            st.session_state.sample_source_scenarios = {}
+            st.session_state.processed_image_names = set()
+            st.session_state.show_balloons = False
+            st.session_state.base_files_ready = False
+            st.session_state.base_file_signature = None
+            st.session_state.trial_balance_ready = False
+            st.session_state.trial_balance_signature = None
+            st.session_state.t001k_ready = False
+            st.session_state.t001k_signature = None
+            st.session_state.mm03_image_names = []
+            st.session_state.mm03_records = []
+            st.session_state.mm03_signature = None
+            st.session_state.scenario_preview = []
+            st.session_state.scenario_preview_schema_version = None
+            st.rerun()
+        st.write("---"); st.caption("© 2026 KPMG. All rights reserved. | IT Audit Technology & Innovation")
+    st.stop()
+
+# Progress
+steps = ["📌 审计背景", "📊 自动分录映射", "📸 审计证据与分析"]
+st.write(f"当前进度: **第 {st.session_state.current_step} 步 / 共 3 步** — {steps[st.session_state.current_step-1]}")
+st.progress(st.session_state.current_step / 3.0)
+
+# --- STEP 1 ---
+if st.session_state.current_step == 1:
+    st.subheader("步骤 1: 设置审计项目背景")
+    with st.form("step1_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            entity_name = st.text_input("被审计单位", placeholder="输入公司名称")
+            saved_system_version = current_system_version()
+            system_index = SYSTEM_VERSION_OPTIONS.index(saved_system_version) if saved_system_version in SYSTEM_VERSION_OPTIONS else 1
+            system_name = st.selectbox("测试系统/版本", SYSTEM_VERSION_OPTIONS, index=system_index)
+        with c2:
+            period_start = st.date_input("审计起始日期", value=datetime.date(2026, 1, 1))
+            period_end = st.date_input("审计截止日期", value=datetime.date(2026, 12, 31))
+        st.write("")
+        col_btn = st.columns([1, 1.5, 1])
+        with col_btn[1]:
+            if st.form_submit_button("下一步：识别自动分录映射", width="stretch"):
+                if entity_name and system_name:
+                    st.session_state.audit_context = {"entity_name": entity_name, "system_name": system_name, "system_version": system_name, "period_start": str(period_start), "period_end": str(period_end)}
+                    go_to_step(2)
+                else: st.error("❗ 请完整填写背景信息。")
+
+# --- STEP 2 ---
+elif st.session_state.current_step == 2:
+    st.subheader("步骤 2: 识别 SAP 自动分录与财务科目映射")
+    st.caption("上传 SAP 自动过账配置与科目主数据，系统将识别收入、成本、存货、应付和生产等业务场景影响的财务科目。余额表可在下一步补充。")
+    u1, u2 = st.columns(2)
+    with u1: t030_file = st.file_uploader("自动过账配置（T030）", type=["csv", "xlsx", "xls"])
+    with u2: skat_file = st.file_uploader("科目主数据（SKAT）", type=["csv", "xlsx", "xls"])
+
+    if t030_file and skat_file:
+        base_signature = upload_signature(t030_file, skat_file)
+        if base_signature != st.session_state.base_file_signature:
+            with st.spinner("正在解析 T030/SKAT 并生成场景匹配预览..."):
+                all_v = True
+                for f_t, f_o in {"T030": t030_file, "SKAT": skat_file}.items():
+                    is_v, msg = validate_upload_to_session(f_o, f_t)
+                    if not is_v:
+                        st.error(f"❌ {f_t} 失败: {msg}")
+                        all_v = False
+                        break
+                if all_v:
+                    tb_path = os.path.join(SESSION_DATA_DIR, "TrialBalance.csv")
+                    if os.path.exists(tb_path):
+                        os.remove(tb_path)
+                    st.session_state.base_files_ready = True
+                    st.session_state.base_file_signature = base_signature
+                    st.session_state.trial_balance_ready = False
+                    st.session_state.trial_balance_signature = None
+                    refresh_scenario_preview()
+                    st.success("已生成场景匹配预览。")
+    elif st.session_state.base_files_ready:
+        st.info("当前显示的是本会话已保存的 T030/SKAT 预览。")
+    else:
+        st.info("请先上传自动过账配置（T030）和科目主数据（SKAT）。")
+
+    if st.session_state.base_files_ready:
+        ensure_scenario_preview_current()
+        st.write("**业务场景与财务科目映射预览**")
+        render_scenario_preview(st.session_state.scenario_preview, show_amount=False)
+        if any("未知科目" in str(acc) for row in st.session_state.scenario_preview for acc in row.get("accounts", [])):
+            st.caption("提示：未知科目表示该科目未在当前 SKAT 中找到名称；后续上传余额表时可继续补充部分描述和金额。")
+
+    st.write("---")
+    nav_cols = st.columns([1, 1.5, 1.5, 1])
+    with nav_cols[1]:
+        if st.button("返回上一步", width="stretch"): go_to_step(1)
+    with nav_cols[2]:
+        if st.button("确认映射并进入审计分析", width="stretch", disabled=not st.session_state.base_files_ready):
+            go_to_step(3)
+
+# --- STEP 3 ---
+elif st.session_state.current_step == 3:
+    if not st.session_state.base_files_ready:
+        st.warning("请先完成 T030/SKAT 场景匹配预览。")
+        if st.button("返回上传配置表", width="stretch"):
+            go_to_step(2)
+        st.stop()
+
+    st.subheader("步骤 3: 审计影响分析与样本证据采集")
+    if is_s4_system():
+        st.caption("SAP S/4 HANA：请上传手工整理过的编辑版科余表，或已按 ACDOCA 归集后的核对表；原始 ACDOCA 明细表过大时不建议直接上传。")
+        tb_label = "可选：S/4 编辑版科目余额/发生额表或 ACDOCA 归集核对表（用于补充金额分析）"
+    else:
+        tb_label = "可选：科目余额/发生额表（用于补充金额分析和部分科目名称）"
+    tb_files = st.file_uploader(tb_label, type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+    if tb_files:
+        tb_signature = upload_signature(tb_files)
+        if tb_signature != st.session_state.trial_balance_signature:
+            with st.spinner("正在校验余额表并刷新场景金额..."):
+                is_v, msg, file_count = validate_uploads_to_session(tb_files, "TrialBalance")
+                if is_v:
+                    st.session_state.trial_balance_ready = True
+                    st.session_state.trial_balance_signature = tb_signature
+                    refresh_scenario_preview()
+                    st.success(f"已加载并合并 {file_count} 张科目余额/发生额表，审计影响金额和可补充的科目名称已刷新。")
+                else:
+                    st.error(f"❌ TrialBalance 失败: {msg}")
+    elif st.session_state.trial_balance_ready:
+        st.success("已加载本会话的科目余额/发生额表。")
+    else:
+        st.info("可以先跳过金额表，直接上传样本或凭证截图生成底稿；审计影响金额将在上传金额表后显示。")
+
+    ensure_scenario_preview_current()
+    render_general_audit_dashboard(st.session_state.scenario_preview)
+
+    st.write("---")
+    st.markdown("**抽样准备：补充主数据并导出抽样场景表**")
+    st.caption("可选：补充公司代码与评估范围、物料主数据等信息，用于把金额分析转换成可执行的样本覆盖范围。技术字段默认保留在抽样准备区。")
+    master_cols = st.columns(2)
+    with master_cols[0]:
+        t001k_file = st.file_uploader("T001K 公司代码/评估分组代码表", type=["csv", "xlsx", "xls"])
+    with master_cols[1]:
+        mm03_images = st.file_uploader("MM03 物料主数据截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+
+    if t001k_file:
+        t001k_signature = upload_signature(t001k_file)
+        if t001k_signature != st.session_state.t001k_signature:
+            is_v, msg = validate_upload_to_session(t001k_file, "T001K")
+            if is_v:
+                st.session_state.t001k_ready = True
+                st.session_state.t001k_signature = t001k_signature
+                st.success("T001K 已加载，抽样场景表将补充评估分组代码。")
+            else:
+                st.error(f"❌ T001K 失败: {msg}")
+    elif st.session_state.t001k_ready:
+        st.success("已加载本会话的 T001K。")
+
+    if mm03_images:
+        mm03_signature = upload_signature(mm03_images)
+        if mm03_signature != st.session_state.mm03_signature:
+            with st.status(f"正在解析 {len(mm03_images)} 张 MM03 截图...", expanded=False) as status:
+                ocr_engine = get_ocr_engine()
+                names = save_uploaded_images(mm03_images, "mm03")
+                records = []
+                for uploaded, saved_name in zip(mm03_images, names):
+                    image_bytes = uploaded.getvalue()
+                    parsed = ocr_engine.process_and_parse(image_bytes, llm_client=None)
+                    if "error" in parsed:
+                        record = parse_mm03_ocr_text("", saved_name)
+                        record["ocr_status"] = parsed["error"]
+                    else:
+                        record = parse_mm03_ocr_text(parsed.get("OCR_TEXT", ""), saved_name)
+                        record["ocr_status"] = "已解析"
+                    records.append(record)
+                st.session_state.mm03_image_names = names
+                st.session_state.mm03_records = records
+                st.session_state.mm03_signature = mm03_signature
+                status.update(label=f"已解析 {len(records)} 张 MM03 截图", state="complete")
+    if st.session_state.mm03_image_names:
+        st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，已解析 {len(st.session_state.mm03_records)} 张，将在抽样场景表中补充物料号、工厂编号与评估分类。")
+    if st.session_state.mm03_records:
+        with st.expander("预览 MM03 解析结果", expanded=False):
+            st.dataframe(pd.DataFrame(mm03_records_to_dataframe_rows(st.session_state.mm03_records)), width="stretch")
+
+    t001k_df = load_session_table("T001K")
+    sampling_df = build_sampling_scenario_table(
+        st.session_state.scenario_preview,
+        t001k_df=t001k_df,
+        mm03_image_names=st.session_state.mm03_image_names,
+        mm03_records=st.session_state.mm03_records,
+    )
+    if sampling_df.empty:
+        st.info("当前暂无可导出的抽样场景表，请先完成 T030/SKAT 场景匹配。")
+    else:
+        export_cols = st.columns([1.2, 2.8])
+        with export_cols[0]:
+            st.download_button(
+                "📥 导出抽样场景表",
+                data=dataframe_to_excel_bytes(sampling_df, "抽样场景表"),
+                file_name="Sampling_Scenario_Table.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                width="stretch",
+            )
+        with export_cols[1]:
+            st.caption("抽样场景表包含公司代码、T001K 评估分组代码、审计场景、科目、金额、额外科目标记，以及 MM03 物料号、工厂编号、评估分类。")
+        with st.expander("预览抽样场景表", expanded=False):
+            st.dataframe(sampling_df.head(50), width="stretch")
+
+    st.write("---")
+    sample_scenario_options = scenario_names_from_preview()
+    if not sample_scenario_options:
+        st.warning("请先完成场景匹配，系统需要 10 个审计场景后才能录入样本。")
+        st.stop()
+    st.caption("如同时上传采购、销售等不同场景的样本，请在上传后按文件分别选择对应审计场景。")
+    s1, s2 = st.columns(2)
+    with s1: samples_files = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+    with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    if samples_files:
+        samples_signature = upload_signature(samples_files)
+        if samples_signature != st.session_state.sample_table_signature:
+            account_descriptions = load_account_description_map(SESSION_DATA_DIR)
+            table_records = []
+            errors = []
+            for uploaded in samples_files:
+                is_v, msg, s_df = DataValidator.validate_file(uploaded, "Samples")
+                if not is_v:
+                    errors.append(f"{uploaded.name}: {msg}")
+                    continue
+                s_df.columns = [str(col).strip().upper() for col in s_df.columns]
+                s_records = enrich_samples_with_account_descriptions(s_df.to_dict("records"), account_descriptions)
+                s_records = normalize_sample_preview_records(s_records, source_type="样本清单", source_file=uploaded.name)
+                s_records = apply_source_scenarios(s_records, st.session_state.sample_source_scenarios)
+                table_records.extend(s_records)
+            if errors:
+                st.error("；".join(errors))
+            else:
+                st.session_state.sample_table_records = table_records
+                st.session_state.sample_table_signature = samples_signature
+                st.session_state.ocr_samples_editor_nonce += 1
+                st.success(f"已加载 {len(samples_files)} 个样本清单文件，共 {len(table_records)} 行样本。")
+    elif st.session_state.sample_table_records:
+        st.info(f"已加载本会话的样本清单，共 {len(st.session_state.sample_table_records)} 行。")
+
+    if voucher_images:
+        # Check if there are NEW images to process
+        new_imgs = [img for img in voucher_images if img.name not in st.session_state.processed_image_names]
+        if new_imgs:
+            if "ocr_engine_inst" not in st.session_state:
+                with st.status("🏗️ 初始化本地 OCR 引擎..."):
+                    from ocr_processor import OCRProcessor
+                    st.session_state.ocr_engine_inst = OCRProcessor()
+            st.session_state.ocr_busy = True
+            try:
+                for img in new_imgs:
+                    with st.status(f"🚀 解析: {img.name}...") as status:
+                        img_bytes = img.getvalue()
+                        llm_c = None
+                        # Use DEFAULT_KEY if available
+                        effective_key = DEFAULT_KEY
+                        if effective_key:
+                            from llm_client import LLMClient
+                            llm_c = LLMClient(api_key=effective_key, model_name=selected_model)
+                        res = st.session_state.ocr_engine_inst.process_and_parse(img_bytes, llm_client=llm_c)
+                        if "items" in res:
+                            account_descriptions = load_account_description_map(SESSION_DATA_DIR)
+                            parsed_items = []
+                            for it in res["items"]:
+                                if it.get("DOC_NUM") and str(it.get("DOC_NUM")).lower() != "null":
+                                    parsed_items.append(enrich_samples_with_account_descriptions([it], account_descriptions)[0])
+                            parsed_items = normalize_sample_preview_records(parsed_items, source_type="凭证截图", source_file=img.name)
+                            parsed_items = apply_source_scenarios(parsed_items, st.session_state.sample_source_scenarios)
+                            for it in parsed_items:
+                                item_id = f"{it.get('SOURCE_FILE')}_{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
+                                if item_id not in [f"{s.get('SOURCE_FILE')}_{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
+                                    st.session_state.ocr_samples.append(it)
+                            st.session_state.processed_image_names.add(img.name)
+                        status.update(label=f"✅ {img.name} 完成", state="complete")
+            finally:
+                st.session_state.ocr_busy = False
+                st.rerun() # Refresh to enable button
+    combined_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
+    if combined_sample_records:
+        render_sample_source_scenario_controls(combined_sample_records, sample_scenario_options)
+        combined_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
+        st.write("**📋 已录入样本预览**")
+        preferred_columns = ["SOURCE_TYPE", "SOURCE_FILE", "SCENARIO", "DOC_NUM", "DATE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG"]
+        ocr_df = prepare_sample_editor_dataframe(
+            combined_sample_records,
+            sample_scenario_options,
+            preferred_columns=preferred_columns,
+        )
+        edited_ocr_df = st.data_editor(
+            ocr_df,
+            width="stretch",
+            num_rows="dynamic",
+            key=f"ocr_samples_editor_{len(combined_sample_records)}_{st.session_state.ocr_samples_editor_nonce}",
+            column_config={
+                "SOURCE_TYPE": st.column_config.TextColumn("来源类型", disabled=True),
+                "SOURCE_FILE": st.column_config.TextColumn("来源文件", disabled=True),
+                "SCENARIO": st.column_config.SelectboxColumn("审计场景", options=sample_scenario_options, required=True),
+                "DOC_NUM": st.column_config.TextColumn("DOC_NUM", required=True),
+                "DATE": st.column_config.TextColumn("DATE"),
+                "SAKNR": st.column_config.TextColumn("SAKNR", required=True),
+                "TXT50": st.column_config.TextColumn("TXT50"),
+                "MATNR": st.column_config.TextColumn("MATNR"),
+                "AMOUNT": st.column_config.TextColumn("AMOUNT", required=True),
+                "SHKZG": st.column_config.TextColumn("SHKZG"),
+            },
+        )
+        edited_records = edited_ocr_df.fillna("").to_dict("records")
+        st.session_state.sample_table_records, st.session_state.ocr_samples = split_sample_preview_records(edited_records)
+        sync_source_scenarios_from_records(edited_records, sample_scenario_options)
+    st.write("---")
+    nav_cols = st.columns([1, 1.5, 1.5, 1])
+    with nav_cols[1]:
+        if st.button("返回上一步", width="stretch"): go_to_step(2)
+    with nav_cols[2]:
+        # Only enable button if ocr is not busy AND we have either a file or OCR samples
+        final_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
+        btn_disabled = st.session_state.ocr_busy or not final_sample_records
+        if st.button("🚀 生成最终底稿", width="stretch", disabled=btn_disabled):
+            with st.spinner("AI 正在撰写穿行测试描述..."):
+                c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
+                invalid_rows = valid_sample_scenarios(final_sample_records, sample_scenario_options)
+                if invalid_rows:
+                    st.error(f"请为每条样本指定 10 个审计场景之一；以下行未完成选择：{', '.join(map(str, invalid_rows[:20]))}")
+                    st.stop()
+                lines = []
+                for s in final_sample_records:
+                    lines.append({"SCENARIO": s.get("SCENARIO"), "DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "MATNR": s.get("MATNR"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
+                s_df = pd.DataFrame(lines)
+                s_df = Core2Orchestrator.normalize_samples_dataframe(s_df)
+                for col in ["SCENARIO", "DOC_NUM", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE"]:
+                    if col not in s_df.columns:
+                        s_df[col] = ""
+                if s_df["SCENARIO"].astype(str).str.strip().isin(["", AUTO_SCENARIO_LABEL]).any():
+                    st.error("请为每条样本指定 10 个审计场景之一。")
+                    st.stop()
+                s_df = s_df[["SCENARIO", "DOC_NUM", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE"]]
+                s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding='utf-8-sig')
+                
+                # Debug: Show internal stats if results are weird
+                if not ranked:
+                    st.warning(f"⚠️ 核心引擎警告: 未能匹配到任何活跃的审计场景。请检查上传清单的内容。")
+                elif not os.path.exists(os.path.join(SESSION_DATA_DIR, "TrialBalance.csv")):
+                    st.info("未上传余额表，本次底稿的场景金额将暂按 0 展示。")
+                elif sum(r['total_value'] for r in ranked) == 0:
+                    st.warning("⚠️ 核心引擎警告: 余额表金额未能匹配到已识别场景，请检查余额表科目范围。")
+                
+                c2 = Core2Orchestrator(SESSION_DATA_DIR)
+                # Use DEFAULT_KEY
+                if DEFAULT_KEY:
+                    from llm_client import LLMClient
+                    c2.llm_client = LLMClient(api_key=DEFAULT_KEY, model_name=selected_model)
+                
+                di = c2.generate_di_descriptions(ranked, st.session_state.audit_context)
+                
+                if not di:
+                    st.info("💡 提示：未能从上传的凭证截图或 Samples 列表中找到与审计场景匹配的样本项目。")
+                
+                gen = ReportGenerator(SESSION_DATA_DIR); path = gen.generate(ranked, di, st.session_state.audit_context)
+                st.session_state.results = {"ranked": ranked, "di": di, "report_path": path}
+                st.session_state.show_balloons = True; st.rerun()
+
+st.write("---")
+st.caption("© 2026 KPMG. All rights reserved. | IT Audit Technology & Innovation")
