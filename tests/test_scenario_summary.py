@@ -58,11 +58,19 @@ def test_build_scenario_account_totals_sums_same_account_across_companies():
     assert "bwmod" not in raw_material
     assert "bklas" not in raw_material
     assert raw_material["total_value"] == 17.0
+    assert raw_material["debit_value"] == 17.0
+    assert raw_material["credit_value"] == 0.0
     assert raw_material["scenario_total_value"] == 22.0
     assert round(raw_material["amount_share_pct"], 2) == 77.27
     assert raw_material["company_count"] == 2
     assert raw_material["company_codes"] == ["4000", "4010"]
+    assert raw_material["company_amounts"] == [
+        {"company_code": "4000", "debit_value": 10.0, "credit_value": 0.0, "total_value": 10.0},
+        {"company_code": "4010", "debit_value": 7.0, "credit_value": 0.0, "total_value": 7.0},
+    ]
     assert gr_ir["total_value"] == 5.0
+    assert gr_ir["debit_value"] == 5.0
+    assert gr_ir["credit_value"] == 0.0
     assert gr_ir["scenario_total_value"] == 22.0
     assert round(gr_ir["amount_share_pct"], 2) == 22.73
     assert gr_ir["company_count"] == 1
@@ -130,7 +138,12 @@ def test_build_scenario_account_totals_filters_by_balance_direction_amounts():
     credit_gr_ir = next(row for row in credit_rows if row["account"] == "2202040000")
 
     assert all_gr_ir["total_value"] == 27.0
+    assert all_gr_ir["debit_value"] == 20.0
+    assert all_gr_ir["credit_value"] == 7.0
     assert all_gr_ir["scenario_total_value"] == 70.0
+    assert all_gr_ir["company_amounts"] == [
+        {"company_code": "4000", "debit_value": 20.0, "credit_value": 7.0, "total_value": 27.0},
+    ]
     assert round(all_gr_ir["amount_share_pct"], 2) == 38.57
     assert debit_raw_material["scenario_total_value"] == 60.0
     assert round(debit_raw_material["amount_share_pct"], 2) == 16.67

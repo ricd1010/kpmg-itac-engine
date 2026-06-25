@@ -35,11 +35,27 @@ def build_scenario_account_totals(ranked, direction_filter="全部"):
                     "account": account_code,
                     "description": detail.get("description") or account.get("description", "未知科目"),
                     "total_value": 0.0,
+                    "debit_value": 0.0,
+                    "credit_value": 0.0,
                     "company_codes": set(),
+                    "company_amounts": {},
                     "extra_company_count": 0,
                 })
+                debit_value = amount_for_direction(account, "借方")
+                credit_value = amount_for_direction(account, "贷方")
                 entry["total_value"] += amount_value
+                entry["debit_value"] += debit_value
+                entry["credit_value"] += credit_value
                 entry["company_codes"].add(company_code)
+                company_amount = entry["company_amounts"].setdefault(company_code, {
+                    "company_code": company_code,
+                    "debit_value": 0.0,
+                    "credit_value": 0.0,
+                    "total_value": 0.0,
+                })
+                company_amount["debit_value"] += debit_value
+                company_amount["credit_value"] += credit_value
+                company_amount["total_value"] += amount_value
                 if account.get("is_extra"):
                     entry["extra_company_count"] += 1
                 description = str(account.get("description", "")).strip()
@@ -55,10 +71,19 @@ def build_scenario_account_totals(ranked, direction_filter="全部"):
                 "account": entry["account"],
                 "description": entry["description"],
                 "total_value": total_value,
+                "debit_value": float(entry["debit_value"]),
+                "credit_value": float(entry["credit_value"]),
                 "scenario_total_value": scenario_total,
                 "amount_share_pct": (total_value / scenario_total * 100) if scenario_total else 0.0,
                 "company_count": len(company_codes),
                 "company_codes": company_codes,
+                "company_amounts": sorted(
+                    entry["company_amounts"].values(),
+                    key=lambda item: (
+                        -float(item["total_value"]),
+                        str(item["company_code"])
+                    )
+                ),
                 "extra_company_count": entry["extra_company_count"],
             })
 

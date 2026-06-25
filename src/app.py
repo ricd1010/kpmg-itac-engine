@@ -27,7 +27,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 12
+SCENARIO_PREVIEW_SCHEMA_VERSION = 13
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -520,14 +520,7 @@ def render_scenario_preview(ranked, show_amount=False):
     matched_accounts = int(preview_df["已匹配名称"].sum())
 
     if show_amount:
-        direction_filter = st.radio(
-            "场景科目方向",
-            ["全部", "借方", "贷方"],
-            horizontal=True,
-            label_visibility="collapsed",
-            key="scenario_account_direction_filter",
-            help="按余额表实际借方/贷方发生额筛选场景科目汇总与公司明细。",
-        )
+        direction_filter = "全部"
 
         def account_chip(account, amount_value):
             chip_class = "account-detail-chip account-extra-chip" if account.get("is_extra") else "account-detail-chip"
@@ -562,26 +555,52 @@ def render_scenario_preview(ranked, show_amount=False):
                 if int(row.get("extra_company_count", 0) or 0) else ""
             )
             company_codes_text = "、".join(str(code) for code in row.get("company_codes", []))
+            company_amount_rows = []
+            for company_amount in row.get("company_amounts", []):
+                company_amount_rows.append(
+                    "<tr>"
+                    f"<td>{html.escape(str(company_amount.get('company_code', '未指定公司')))}</td>"
+                    f"<td class='amount'>{float(company_amount.get('debit_value', 0) or 0):,.2f}</td>"
+                    f"<td class='amount'>{float(company_amount.get('credit_value', 0) or 0):,.2f}</td>"
+                    f"<td class='amount'>{float(company_amount.get('total_value', 0) or 0):,.2f}</td>"
+                    "</tr>"
+                )
+            company_amount_html = "".join(company_amount_rows) or (
+                "<tr><td colspan='4' class='empty-cell'>暂无公司金额明细</td></tr>"
+            )
             summary_rows.append(
-                "<tr>"
-                f"<td class='scenario-name'>{html.escape(str(row.get('scenario', '')))}</td>"
-                f"<td><span class='summary-account-code'>{html.escape(str(row.get('account', '')))}</span></td>"
-                f"<td>{html.escape(str(row.get('description', '未知科目')))}</td>"
-                f"<td class='amount'>{float(row.get('total_value', 0) or 0):,.2f}</td>"
-                f"<td class='amount-share'>{float(row.get('amount_share_pct', 0) or 0):.2f}%</td>"
-                f"<td class='summary-company-count' title='{html.escape(company_codes_text)}'>{int(row.get('company_count', 0) or 0)}</td>"
-                f"<td>{extra_note}</td>"
-                "</tr>"
+                "<details class='summary-account-row'>"
+                "<summary class='summary-row-grid'>"
+                f"<span class='scenario-name'>{html.escape(str(row.get('scenario', '')))}</span>"
+                f"<span class='summary-account-code'>{html.escape(str(row.get('account', '')))}</span>"
+                f"<span>{html.escape(str(row.get('description', '未知科目')))}</span>"
+                f"<span class='amount'>{float(row.get('total_value', 0) or 0):,.2f}</span>"
+                f"<span class='amount-share'>{float(row.get('amount_share_pct', 0) or 0):.2f}%</span>"
+                f"<span class='summary-company-count' title='{html.escape(company_codes_text)}'>{int(row.get('company_count', 0) or 0)}</span>"
+                f"<span>{extra_note}</span>"
+                "</summary>"
+                "<div class='summary-side-panel'>"
+                "<div class='side-metric-row'>"
+                f"<span>借方金额 <strong>{float(row.get('debit_value', 0) or 0):,.2f}</strong></span>"
+                f"<span>贷方金额 <strong>{float(row.get('credit_value', 0) or 0):,.2f}</strong></span>"
+                f"<span>借贷合计 <strong>{float(row.get('total_value', 0) or 0):,.2f}</strong></span>"
+                "</div>"
+                "<table class='summary-side-table'>"
+                "<thead><tr><th>公司代码</th><th class='amount'>借方金额</th><th class='amount'>贷方金额</th><th class='amount'>合计金额</th></tr></thead>"
+                f"<tbody>{company_amount_html}</tbody>"
+                "</table>"
+                "</div>"
+                "</details>"
             )
         summary_html = ""
         if summary_rows:
             summary_html = (
                 "<section class='scenario-total-summary'>"
-                f"<div class='summary-title'>场景科目总金额汇总<span class='summary-direction-pill'>{html.escape(direction_filter)}</span></div>"
-                "<table class='scenario-total-table'>"
-                "<thead><tr><th>审计场景</th><th>科目编码</th><th>科目描述</th><th class='amount'>总金额</th><th class='amount-share'>占比</th><th>命中公司数</th><th>提示</th></tr></thead>"
-                f"<tbody>{''.join(summary_rows)}</tbody>"
-                "</table>"
+                "<div class='summary-title'>场景科目总金额汇总 <span class='summary-subtitle'>点击科目行展开借贷明细</span></div>"
+                "<div class='summary-row-grid summary-header'>"
+                "<span>审计场景</span><span>科目编码</span><span>科目描述</span><span class='amount'>总金额</span><span class='amount-share'>占比</span><span>命中公司数</span><span>提示</span>"
+                "</div>"
+                f"<div class='summary-accordion'>{''.join(summary_rows)}</div>"
                 "</section>"
             )
 
@@ -669,40 +688,107 @@ def render_scenario_preview(ranked, show_amount=False):
                 font-weight: 800;
                 border-bottom: 1px solid #d8dde6;
             }}
-            .summary-direction-pill {{
-                display: inline-block;
-                border-radius: 999px;
-                border: 1px solid #00a3a1;
-                background: #fff;
-                color: #006b6b;
+            .summary-subtitle {{
+                color: #607085;
                 font-size: 12px;
-                font-weight: 700;
-                padding: 2px 9px;
-            }}
-            .scenario-total-table {{
-                width: 100%;
-                border-collapse: collapse;
-                font-size: 14px;
-            }}
-            .scenario-total-table th,
-            .scenario-total-table td {{
-                border-bottom: 1px solid #e7eaf0;
-                border-right: 1px solid #e7eaf0;
-                padding: 9px 12px;
-                text-align: left;
-                vertical-align: top;
-            }}
-            .scenario-total-table tr:last-child td {{
-                border-bottom: 0;
-            }}
-            .scenario-total-table th {{
-                color: #4d5a6a;
-                background: #fbfcfe;
                 font-weight: 600;
             }}
-            .scenario-total-table th:last-child,
-            .scenario-total-table td:last-child {{
+            .summary-row-grid {{
+                display: grid;
+                grid-template-columns: minmax(150px, 1.1fr) minmax(130px, .9fr) minmax(260px, 2.2fr) minmax(140px, .9fr) minmax(90px, .6fr) minmax(100px, .7fr) minmax(120px, .8fr);
+                align-items: center;
+                gap: 0;
+                min-width: 1080px;
+            }}
+            .summary-header {{
+                color: #4d5a6a;
+                background: #fbfcfe;
+                font-size: 14px;
+                font-weight: 600;
+                border-bottom: 1px solid #e7eaf0;
+            }}
+            .summary-header span,
+            .summary-account-row summary span {{
+                padding: 9px 12px;
+                border-right: 1px solid #e7eaf0;
+            }}
+            .summary-header span:last-child,
+            .summary-account-row summary span:last-child {{
                 border-right: 0;
+            }}
+            .summary-accordion {{
+                overflow-x: auto;
+            }}
+            .summary-account-row {{
+                border-bottom: 1px solid #e7eaf0;
+                font-size: 14px;
+            }}
+            .summary-account-row:last-child {{
+                border-bottom: 0;
+            }}
+            .summary-account-row summary {{
+                cursor: pointer;
+                list-style: none;
+                background: #fff;
+                position: relative;
+            }}
+            .summary-account-row summary::-webkit-details-marker {{
+                display: none;
+            }}
+            .summary-account-row summary:hover {{
+                background: #f7fbff;
+            }}
+            .summary-account-row summary::before {{
+                content: "▸";
+                position: absolute;
+                margin: 9px 0 0 2px;
+                color: #00338d;
+                font-weight: 800;
+            }}
+            .summary-account-row[open] summary::before {{
+                content: "▾";
+            }}
+            .summary-account-row summary .scenario-name {{
+                padding-left: 26px;
+            }}
+            .summary-side-panel {{
+                background: #f8fbff;
+                border-top: 1px solid #e7eaf0;
+                padding: 12px 18px 14px 18px;
+            }}
+            .side-metric-row {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-bottom: 10px;
+            }}
+            .side-metric-row span {{
+                border: 1px solid #d8dde6;
+                border-radius: 999px;
+                background: #fff;
+                color: #4d5a6a;
+                padding: 5px 10px;
+            }}
+            .side-metric-row strong {{
+                color: #00338d;
+                margin-left: 6px;
+            }}
+            .summary-side-table {{
+                width: 100%;
+                border-collapse: collapse;
+                background: #fff;
+                font-size: 13px;
+            }}
+            .summary-side-table th,
+            .summary-side-table td {{
+                border: 1px solid #e7eaf0;
+                padding: 7px 9px;
+                text-align: left;
+            }}
+            .summary-side-table th {{
+                background: #fbfcfe;
+                color: #4d5a6a;
+                font-weight: 700;
             }}
             .summary-account-code {{
                 color: #00338d;
@@ -713,8 +799,9 @@ def render_scenario_preview(ranked, show_amount=False):
                 text-align: right;
                 white-space: nowrap;
             }}
-            .scenario-total-table .amount,
-            .scenario-total-table .amount-share {{
+            .summary-row-grid .amount,
+            .summary-row-grid .amount-share,
+            .summary-side-table .amount {{
                 text-align: right;
                 white-space: nowrap;
             }}
