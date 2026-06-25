@@ -245,6 +245,7 @@ if "ocr_samples" not in st.session_state: st.session_state.ocr_samples = []
 if "ocr_samples_editor_nonce" not in st.session_state: st.session_state.ocr_samples_editor_nonce = 0
 if "sample_table_records" not in st.session_state: st.session_state.sample_table_records = []
 if "sample_table_signature" not in st.session_state: st.session_state.sample_table_signature = None
+if "sample_source_scenarios" not in st.session_state: st.session_state.sample_source_scenarios = {}
 if "processed_image_names" not in st.session_state: st.session_state.processed_image_names = set()
 if "results" not in st.session_state: st.session_state.results = None
 if "api_key_valid" not in st.session_state: st.session_state.api_key_valid = False
@@ -567,15 +568,101 @@ def prepare_sample_editor_dataframe(records, scenario_options, preferred_columns
     remaining_columns = [col for col in df.columns if col not in preferred_columns]
     return df[preferred_columns + remaining_columns]
 
-def apply_bulk_scenario(records, selected_scenario):
-    if not selected_scenario:
-        return [dict(record) for record in records or []]
+def sample_source_key(source_type, source_file):
+    return f"{str(source_type or '').strip()}::{str(source_file or '').strip()}"
+
+def sample_source_groups(records):
+    groups = {}
+    for record in records or []:
+        source_type = str(record.get("SOURCE_TYPE", "") or "").strip()
+        source_file = str(record.get("SOURCE_FILE", "") or "").strip()
+        key = sample_source_key(source_type, source_file)
+        if key == "::":
+            continue
+        groups.setdefault(key, {
+            "source_type": source_type or "样本",
+            "source_file": source_file or "未命名来源",
+            "records": [],
+        })["records"].append(record)
+    return groups
+
+def infer_source_scenario(records, scenario_options):
+    allowed = set(scenario_options or [])
+    values = {
+        str(record.get("SCENARIO", "") or "").strip()
+        for record in records or []
+        if str(record.get("SCENARIO", "") or "").strip() in allowed
+    }
+    return next(iter(values)) if len(values) == 1 else ""
+
+def apply_source_scenarios(records, source_scenarios):
     updated = []
     for record in records or []:
         item = dict(record)
-        item["SCENARIO"] = selected_scenario
+        key = sample_source_key(item.get("SOURCE_TYPE"), item.get("SOURCE_FILE"))
+        scenario = str((source_scenarios or {}).get(key, "") or "").strip()
+        if scenario:
+            item["SCENARIO"] = scenario
         updated.append(item)
     return updated
+
+def sync_source_scenarios_from_records(records, scenario_options):
+    groups = sample_source_groups(records)
+    current_keys = set(groups)
+    st.session_state.sample_source_scenarios = {
+        key: value
+        for key, value in st.session_state.sample_source_scenarios.items()
+        if key in current_keys
+    }
+    for key, info in groups.items():
+        scenario = infer_source_scenario(info["records"], scenario_options)
+        if scenario:
+            st.session_state.sample_source_scenarios[key] = scenario
+
+def render_sample_source_scenario_controls(records, scenario_options):
+    groups = sample_source_groups(records)
+    if not groups:
+        return
+
+    current_keys = set(groups)
+    st.session_state.sample_source_scenarios = {
+        key: value
+        for key, value in st.session_state.sample_source_scenarios.items()
+        if key in current_keys
+    }
+
+    st.write("**按上传文件指定审计场景**")
+    st.caption("每个样本清单或凭证截图单独选择一个场景；选择后会自动填充该来源下的所有样本行，下方预览表仍可逐行微调。")
+    placeholder = "请选择场景"
+    columns = st.columns(min(3, max(1, len(groups))))
+    changed = False
+    for idx, (key, info) in enumerate(sorted(groups.items(), key=lambda item: item[1]["source_file"])):
+        existing = st.session_state.sample_source_scenarios.get(key) or infer_source_scenario(info["records"], scenario_options)
+        options = [placeholder] + list(scenario_options)
+        index = options.index(existing) if existing in options else 0
+        digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
+        with columns[idx % len(columns)]:
+            selected = st.selectbox(
+                f"{info['source_file']} ({info['source_type']}, {len(info['records'])} 行)",
+                options,
+                index=index,
+                key=f"sample_source_scenario_{digest}",
+            )
+        value = "" if selected == placeholder else selected
+        if st.session_state.sample_source_scenarios.get(key, "") != value:
+            st.session_state.sample_source_scenarios[key] = value
+            changed = True
+
+    if changed:
+        st.session_state.sample_table_records = apply_source_scenarios(
+            st.session_state.sample_table_records,
+            st.session_state.sample_source_scenarios,
+        )
+        st.session_state.ocr_samples = apply_source_scenarios(
+            st.session_state.ocr_samples,
+            st.session_state.sample_source_scenarios,
+        )
+        st.session_state.ocr_samples_editor_nonce += 1
 
 def split_sample_preview_records(records):
     table_records = []
@@ -1274,6 +1361,7 @@ if st.session_state.results:
             st.session_state.ocr_samples = []
             st.session_state.sample_table_records = []
             st.session_state.sample_table_signature = None
+            st.session_state.sample_source_scenarios = {}
             st.session_state.processed_image_names = set()
             st.session_state.show_balloons = False
             st.session_state.base_files_ready = False
@@ -1481,20 +1569,7 @@ elif st.session_state.current_step == 3:
     if not sample_scenario_options:
         st.warning("请先完成场景匹配，系统需要 10 个审计场景后才能录入样本。")
         st.stop()
-    bulk_scenario_label = "不批量指定"
-    sample_scenario_choice = st.selectbox(
-        "批量指定本次上传样本审计场景（可选）",
-        [bulk_scenario_label] + sample_scenario_options,
-        help="如本次上传的多张凭证或多份表格都属于同一场景，可在这里批量指定；否则在下方预览表逐行选择 10 个场景之一。",
-    )
-    selected_bulk_scenario = "" if sample_scenario_choice == bulk_scenario_label else sample_scenario_choice
-    if selected_bulk_scenario and (st.session_state.ocr_samples or st.session_state.sample_table_records):
-        table_records = apply_bulk_scenario(st.session_state.sample_table_records, selected_bulk_scenario)
-        image_records = apply_bulk_scenario(st.session_state.ocr_samples, selected_bulk_scenario)
-        if table_records != st.session_state.sample_table_records or image_records != st.session_state.ocr_samples:
-            st.session_state.sample_table_records = table_records
-            st.session_state.ocr_samples = image_records
-            st.session_state.ocr_samples_editor_nonce += 1
+    st.caption("如同时上传采购、销售等不同场景的样本，请在上传后按文件分别选择对应审计场景。")
     s1, s2 = st.columns(2)
     with s1: samples_files = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
     with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
@@ -1512,7 +1587,7 @@ elif st.session_state.current_step == 3:
                 s_df.columns = [str(col).strip().upper() for col in s_df.columns]
                 s_records = enrich_samples_with_account_descriptions(s_df.to_dict("records"), account_descriptions)
                 s_records = normalize_sample_preview_records(s_records, source_type="样本清单", source_file=uploaded.name)
-                s_records = apply_bulk_scenario(s_records, selected_bulk_scenario)
+                s_records = apply_source_scenarios(s_records, st.session_state.sample_source_scenarios)
                 table_records.extend(s_records)
             if errors:
                 st.error("；".join(errors))
@@ -1551,7 +1626,7 @@ elif st.session_state.current_step == 3:
                                 if it.get("DOC_NUM") and str(it.get("DOC_NUM")).lower() != "null":
                                     parsed_items.append(enrich_samples_with_account_descriptions([it], account_descriptions)[0])
                             parsed_items = normalize_sample_preview_records(parsed_items, source_type="凭证截图", source_file=img.name)
-                            parsed_items = apply_bulk_scenario(parsed_items, selected_bulk_scenario)
+                            parsed_items = apply_source_scenarios(parsed_items, st.session_state.sample_source_scenarios)
                             for it in parsed_items:
                                 item_id = f"{it.get('SOURCE_FILE')}_{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
                                 if item_id not in [f"{s.get('SOURCE_FILE')}_{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
@@ -1563,6 +1638,8 @@ elif st.session_state.current_step == 3:
                 st.rerun() # Refresh to enable button
     combined_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
     if combined_sample_records:
+        render_sample_source_scenario_controls(combined_sample_records, sample_scenario_options)
+        combined_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
         st.write("**📋 已录入样本预览**")
         preferred_columns = ["SOURCE_TYPE", "SOURCE_FILE", "SCENARIO", "DOC_NUM", "DATE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG"]
         ocr_df = prepare_sample_editor_dataframe(
@@ -1590,6 +1667,7 @@ elif st.session_state.current_step == 3:
         )
         edited_records = edited_ocr_df.fillna("").to_dict("records")
         st.session_state.sample_table_records, st.session_state.ocr_samples = split_sample_preview_records(edited_records)
+        sync_source_scenarios_from_records(edited_records, sample_scenario_options)
     st.write("---")
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
