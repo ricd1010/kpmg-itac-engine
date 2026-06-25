@@ -17,7 +17,7 @@ from report_generator import ReportGenerator
 from data_validator import DataValidator
 from scenario_summary import amount_for_direction, build_scenario_account_totals
 from sampling_scenario import build_sampling_scenario_table
-from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map, prepare_sample_editor_dataframe
+from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
 from mm03_parser import mm03_records_to_dataframe_rows, parse_mm03_ocr_text
 from dotenv import load_dotenv
 
@@ -538,6 +538,34 @@ def normalize_sample_preview_records(records, source_type="", source_file=""):
         item["SOURCE_FILE"] = item.get("SOURCE_FILE", source_file)
         normalized.append(item)
     return normalized
+
+def editor_text_value(value):
+    if pd.isna(value):
+        return ""
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return ""
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+def prepare_sample_editor_dataframe(records, scenario_options, preferred_columns):
+    df = pd.DataFrame(records or [])
+    for col in preferred_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    allowed_scenarios = set(scenario_options or [])
+    df["SCENARIO"] = df["SCENARIO"].map(editor_text_value).apply(
+        lambda value: value if value in allowed_scenarios else ""
+    )
+    for col in df.columns:
+        if col != "SCENARIO":
+            df[col] = df[col].map(editor_text_value)
+
+    remaining_columns = [col for col in df.columns if col not in preferred_columns]
+    return df[preferred_columns + remaining_columns]
 
 def apply_bulk_scenario(records, selected_scenario):
     if not selected_scenario:
