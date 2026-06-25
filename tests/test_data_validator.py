@@ -244,12 +244,12 @@ def test_trial_balance_excel_reads_first_sheet_only(tmp_path):
     assert df.iloc[0]["DMBTR_DEBIT"] == 12.0
 
 
-def test_t001k_maps_company_valuation_area_and_group(tmp_path):
+def test_t001k_maps_company_and_valuation_group(tmp_path):
     t001k_path = tmp_path / "t001k.csv"
     t001k_path.write_text(
         "\n".join([
-            "公司代码,评估范围,评估分组",
-            "4000,4000,0001",
+            "公司代码,评估分组代码",
+            "4000,4110",
         ]),
         encoding="utf-8-sig",
     )
@@ -257,7 +257,6 @@ def test_t001k_maps_company_valuation_area_and_group(tmp_path):
     ok, msg, df = DataValidator.validate_file(MockUpload(t001k_path), "T001K")
 
     assert ok, msg
-    assert {"BUKRS", "BWKEY", "BWMOD"}.issubset(df.columns)
+    assert {"BUKRS", "BWMOD"}.issubset(df.columns)
     assert df.iloc[0]["BUKRS"] == "4000"
-    assert df.iloc[0]["BWKEY"] == "4000"
-    assert df.iloc[0]["BWMOD"] == "0001"
+    assert df.iloc[0]["BWMOD"] == "4110"

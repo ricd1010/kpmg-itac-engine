@@ -30,12 +30,9 @@ def test_parse_mm03_ocr_text_prefers_title_material_number_and_normalizes_fields
 
     assert record["source_file"] == "MM03销售.png"
     assert record["material_number"] == "50006420"
-    assert record["material_description"].startswith("新希望")
     assert record["plant"] == "410"
-    assert record["plant_name"] == "青岛新希望琴牌乳业工厂"
-    assert record["base_unit"] == "每一个"
     assert record["valuation_class"] == "7921"
-    assert record["price_control"] == "S"
+    assert set(record.keys()) == {"source_file", "material_number", "plant", "valuation_class"}
 
 
 def test_parse_mm03_ocr_text_normalizes_valuation_class_ocr_noise():
@@ -58,7 +55,5 @@ def test_parse_mm03_ocr_text_normalizes_valuation_class_ocr_noise():
     record = parse_mm03_ocr_text(text, "MM03采购.png")
 
     assert record["material_number"] == "10000000"
-    assert record["material_description"] == "原辅材料"
     assert record["plant"] == "410"
     assert record["valuation_class"] == "3000"
-    assert record["price_control"] == "V"

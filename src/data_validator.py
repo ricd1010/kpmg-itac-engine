@@ -11,7 +11,7 @@ class DataValidator:
         "T030": ["KONTS", "KONTH"], 
         "TrialBalance": ["SAKNR", "DMBTR_DEBIT"],
         "Samples": ["DOC_NUM", "SAKNR", "AMOUNT"],
-        "T001K": ["BWKEY"]
+        "T001K": ["BUKRS", "BWMOD"]
     }
 
     @staticmethod
@@ -318,7 +318,6 @@ class DataValidator:
             }
         elif file_type == "T001K":
             mapping = {
-                "BWKEY": ["bwkey", "评估范围", "评估范围代码", "valuation area", "valuationarea"],
                 "BUKRS": ["bukrs", "公司代码", "公司编码", "company code", "companycode"],
                 "BWMOD": ["bwmod", "评估分组", "评估分组代码", "valuation grouping code", "valuationgroupingcode"],
             }

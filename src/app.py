@@ -1325,10 +1325,10 @@ elif st.session_state.current_step == 3:
 
     st.write("---")
     st.markdown("**补充主数据并导出抽样场景表**")
-    st.caption("可选：上传 T001K 补充公司代码、评估范围与评估分组；上传 MM03 截图作为后续物料主数据核对资料。完成后可先导出抽样场景表，再上传样本。")
+    st.caption("可选：上传 T001K 补充公司代码与评估分组代码；上传 MM03 截图仅抓取物料号、工厂编号与评估分类，用于按凭证字段核对 T030 科目映射。完成后可先导出抽样场景表，再上传样本。")
     master_cols = st.columns(2)
     with master_cols[0]:
-        t001k_file = st.file_uploader("T001K 评估范围/公司代码表", type=["csv", "xlsx", "xls"])
+        t001k_file = st.file_uploader("T001K 公司代码/评估分组代码表", type=["csv", "xlsx", "xls"])
     with master_cols[1]:
         mm03_images = st.file_uploader("MM03 物料主数据截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
@@ -1339,7 +1339,7 @@ elif st.session_state.current_step == 3:
             if is_v:
                 st.session_state.t001k_ready = True
                 st.session_state.t001k_signature = t001k_signature
-                st.success("T001K 已加载，抽样场景表将补充评估范围与评估分组。")
+                st.success("T001K 已加载，抽样场景表将补充评估分组代码。")
             else:
                 st.error(f"❌ T001K 失败: {msg}")
     elif st.session_state.t001k_ready:
@@ -1367,7 +1367,7 @@ elif st.session_state.current_step == 3:
                 st.session_state.mm03_signature = mm03_signature
                 status.update(label=f"已解析 {len(records)} 张 MM03 截图", state="complete")
     if st.session_state.mm03_image_names:
-        st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，已解析 {len(st.session_state.mm03_records)} 张，将在抽样场景表中补充物料主数据字段。")
+        st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，已解析 {len(st.session_state.mm03_records)} 张，将在抽样场景表中补充物料号、工厂编号与评估分类。")
     if st.session_state.mm03_records:
         with st.expander("预览 MM03 解析结果", expanded=False):
             st.dataframe(pd.DataFrame(mm03_records_to_dataframe_rows(st.session_state.mm03_records)), width="stretch")
@@ -1392,7 +1392,7 @@ elif st.session_state.current_step == 3:
                 width="stretch",
             )
         with export_cols[1]:
-            st.caption("抽样场景表包含公司代码、评估范围、评估分组、审计场景、科目、金额、额外科目标记，以及 MM03 物料号、物料描述、工厂、评估类等补充字段。")
+            st.caption("抽样场景表包含公司代码、T001K 评估分组代码、审计场景、科目、金额、额外科目标记，以及 MM03 物料号、工厂编号、评估分类。")
         with st.expander("预览抽样场景表", expanded=False):
             st.dataframe(sampling_df.head(50), width="stretch")
 

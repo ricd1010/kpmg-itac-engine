@@ -172,23 +172,13 @@ def parse_mm03_ocr_text(ocr_text, source_file=""):
     full_text = "\n".join(lines)
 
     material_number, title_desc = _find_material(lines, full_text)
-    material_description = _find_material_description(lines, material_number, title_desc)
     valuation_class = _next_value(lines, ["评估分类", "评估分", "评怙分类", "评估类"], numeric=True, field="valuation_class")
 
     return {
         "source_file": _clean_text(source_file),
         "material_number": material_number,
-        "material_description": material_description,
         "plant": _find_plant(lines),
-        "plant_name": _find_plant_name(lines),
-        "base_unit": _next_value(lines, ["基本单位"]),
         "valuation_class": valuation_class,
-        "price_control": _find_price_control(lines),
-        "price_unit": _next_value(lines, ["价格单位"], numeric=True),
-        "standard_price": _next_value(lines, ["标准价格", "标淮价格"], numeric=True),
-        "periodic_unit_price": _next_value(lines, ["周期单位价格"], numeric=True),
-        "stock_value": _next_value(lines, ["存货价值", "货价值"], numeric=True),
-        "valuation_price": _next_value(lines, ["评估/每一单位价格", "评诂|每一", "评店|每一"], numeric=True),
     }
 
 
@@ -198,16 +188,7 @@ def mm03_records_to_dataframe_rows(records):
         rows.append({
             "MM03文件": record.get("source_file", ""),
             "物料号": record.get("material_number", ""),
-            "物料描述": record.get("material_description", ""),
-            "工厂": record.get("plant", ""),
-            "工厂名称": record.get("plant_name", ""),
-            "基本单位": record.get("base_unit", ""),
-            "评估类": record.get("valuation_class", ""),
-            "价格控制": record.get("price_control", ""),
-            "价格单位": record.get("price_unit", ""),
-            "标准价格": record.get("standard_price", ""),
-            "周期单位价格": record.get("periodic_unit_price", ""),
-            "存货价值": record.get("stock_value", ""),
-            "评估单价": record.get("valuation_price", ""),
+            "工厂编号": record.get("plant", ""),
+            "评估分类": record.get("valuation_class", ""),
         })
     return rows
