@@ -43,7 +43,7 @@ fav_svg = f"""
 fav_b64 = base64.b64encode(fav_svg.encode()).decode()
 
 st.set_page_config(
-    page_title="KPMG SAP 自动分录审计分析平台",
+    page_title="TSDA 测试范围框定辅助驾驶舱",
     page_icon=f"data:image/svg+xml;base64,{fav_b64}",
     layout="wide",
 )
@@ -264,6 +264,17 @@ if "mm03_signature" not in st.session_state: st.session_state.mm03_signature = N
 if "scenario_preview" not in st.session_state: st.session_state.scenario_preview = []
 if "scenario_preview_schema_version" not in st.session_state: st.session_state.scenario_preview_schema_version = None
 if "scroll_to_top" not in st.session_state: st.session_state.scroll_to_top = False
+if "project_folder_loaded" not in st.session_state: st.session_state.project_folder_loaded = False
+if "project_folder_signature" not in st.session_state: st.session_state.project_folder_signature = None
+if "project_folder_manifest" not in st.session_state: st.session_state.project_folder_manifest = []
+if "project_folder_summary" not in st.session_state: st.session_state.project_folder_summary = {}
+if "project_pending_mm03_sources" not in st.session_state: st.session_state.project_pending_mm03_sources = []
+if "project_pending_voucher_sources" not in st.session_state: st.session_state.project_pending_voucher_sources = []
+if "audit_coverage_selected_keys" not in st.session_state: st.session_state.audit_coverage_selected_keys = set()
+if "audit_coverage_target_pct" not in st.session_state: st.session_state.audit_coverage_target_pct = 80
+if "audit_coverage_auto_seed_signature" not in st.session_state: st.session_state.audit_coverage_auto_seed_signature = None
+if "project_auto_mm03_attempted" not in st.session_state: st.session_state.project_auto_mm03_attempted = False
+if "project_auto_voucher_attempted" not in st.session_state: st.session_state.project_auto_voucher_attempted = False
 
 def current_system_version():
     return st.session_state.audit_context.get("system_version") or st.session_state.audit_context.get("system_name") or "SAP S/4 HANA"
@@ -405,7 +416,7 @@ def save_uploaded_images(files, folder_name):
     used_names = set()
     for uploaded in files or []:
         data = uploaded.getvalue()
-        original_name = os.path.basename(uploaded.name)
+        original_name = re.split(r"[\\/]", str(uploaded.name))[-1]
         stem, ext = os.path.splitext(original_name)
         safe_stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._") or "image"
         safe_ext = re.sub(r"[^A-Za-z0-9.]+", "", ext.lower()) or ".png"
@@ -420,6 +431,513 @@ def save_uploaded_images(files, folder_name):
             f.write(data)
         saved_names.append(safe_name)
     return saved_names
+
+def saved_image_path(folder_name, saved_name):
+    target_dir = os.path.abspath(os.path.join(SESSION_DATA_DIR, folder_name))
+    candidate = os.path.abspath(os.path.join(target_dir, os.path.basename(str(saved_name or ""))))
+    if not candidate.startswith(target_dir + os.sep):
+        raise ValueError("图片路径不在当前会话目录内")
+    return candidate
+
+def read_saved_image_bytes(folder_name, saved_name):
+    path = saved_image_path(folder_name, saved_name)
+    with open(path, "rb") as f:
+        return f.read()
+
+def save_project_image_sources(files, folder_name):
+    saved_names = save_uploaded_images(files, folder_name)
+    return [
+        {
+            "source_file": project_upload_display_name(uploaded),
+            "saved_name": saved_name,
+        }
+        for uploaded, saved_name in zip(files or [], saved_names)
+    ]
+
+PROJECT_TYPE_LABELS = {
+    "T030": "自动过账配置 T030",
+    "SKAT": "科目主数据 SKAT",
+    "TrialBalance": "科目余额/发生额表",
+    "T001K": "T001K 公司代码/评估分组",
+    "Samples": "样本清单",
+    "MM03": "MM03 物料主数据截图",
+    "VoucherImage": "凭证截图",
+    "Unclassified": "未识别",
+}
+
+PROJECT_SPREADSHEET_TYPES = ["T030", "SKAT", "TrialBalance", "T001K", "Samples"]
+PROJECT_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
+PROJECT_DATA_EXTS = {".csv", ".xlsx", ".xls", ".txt"}
+
+def project_upload_display_name(uploaded_file):
+    return str(getattr(uploaded_file, "name", "") or "未命名文件").replace("\\", "/")
+
+def project_upload_basename(uploaded_file):
+    return re.split(r"[\\/]", project_upload_display_name(uploaded_file))[-1]
+
+def project_filename_score(name, file_type):
+    text = str(name or "").lower()
+    score_map = {
+        "T030": ["t030", "obyc", "自动过账", "过账配置", "配置表"],
+        "SKAT": ["skat", "科目主数据", "科目表", "总账科目表"],
+        "TrialBalance": ["科余", "课余", "余额", "发生额", "余额表", "faglflext", "trial", "balance", "acdoca", "tb"],
+        "T001K": ["t001k", "评估范围", "评估分组"],
+        "Samples": ["sample", "samples", "样本", "fb03", "凭证", "清单", "inf"],
+    }
+    score = 0
+    for keyword in score_map.get(file_type, []):
+        if keyword and keyword.lower() in text:
+            score += 30
+    if file_type == "SKAT" and any(word in text for word in ["科余", "课余", "余额"]):
+        score -= 40
+    if file_type == "Samples" and any(word in text for word in ["t030", "skat", "t001k", "科余", "课余", "余额"]):
+        score -= 30
+    return score
+
+def project_preferred_type_from_filename(name):
+    text = str(name or "").lower()
+    strong_rules = [
+        ("TrialBalance", ["科余", "课余", "余额", "发生额", "余额表", "faglflext", "acdoca", "trial", "balance"]),
+        ("T001K", ["t001k", "评估范围", "评估分组"]),
+        ("T030", ["t030", "obyc", "自动过账", "过账配置"]),
+        ("SKAT", ["skat", "科目主数据", "总账科目表"]),
+        ("Samples", ["sample", "samples", "样本", "fb03", "凭证"]),
+    ]
+    for file_type, keywords in strong_rules:
+        if any(keyword.lower() in text for keyword in keywords):
+            return file_type
+    return ""
+
+def project_validate_candidate(uploaded_file, file_type):
+    try:
+        uploaded_file.seek(0)
+        is_valid, msg, df = DataValidator.validate_file(uploaded_file, file_type)
+        uploaded_file.seek(0)
+    except Exception as exc:
+        is_valid, msg, df = False, str(exc), None
+    row_count = int(len(df)) if is_valid and df is not None else 0
+    col_count = int(len(df.columns)) if is_valid and df is not None else 0
+    score = project_filename_score(project_upload_display_name(uploaded_file), file_type)
+    if is_valid:
+        score += 100 + min(row_count, 100) / 5 + min(col_count, 30)
+    return {
+        "file_type": file_type,
+        "valid": bool(is_valid),
+        "message": msg,
+        "rows": row_count,
+        "columns": col_count,
+        "score": score,
+    }
+
+def classify_project_upload(uploaded_file):
+    display_name = project_upload_display_name(uploaded_file)
+    basename = project_upload_basename(uploaded_file)
+    _, ext = os.path.splitext(basename.lower())
+    name_text = display_name.lower()
+    size = getattr(uploaded_file, "size", None)
+
+    if basename.startswith("~$") or basename.startswith("."):
+        return {
+            "文件": display_name,
+            "识别类型": PROJECT_TYPE_LABELS["Unclassified"],
+            "detected_type": "Unclassified",
+            "状态": "跳过",
+            "原因": "临时文件或隐藏文件，不参与项目资料识别",
+            "confidence": 0,
+            "size": size,
+        }
+
+    if ext in PROJECT_IMAGE_EXTS:
+        if any(token in name_text for token in ["mm03", "物料主数据", "material master", "material_master"]):
+            detected_type = "MM03"
+            reason = "文件名包含 MM03/物料主数据关键词"
+            confidence = 95
+        else:
+            detected_type = "VoucherImage"
+            reason = "图片文件，按凭证截图导入；如为 MM03 请在文件名中包含 MM03"
+            confidence = 70
+        return {
+            "文件": display_name,
+            "识别类型": PROJECT_TYPE_LABELS[detected_type],
+            "detected_type": detected_type,
+            "状态": "可加载",
+            "原因": reason,
+            "confidence": confidence,
+            "size": size,
+        }
+
+    if ext not in PROJECT_DATA_EXTS:
+        return {
+            "文件": display_name,
+            "识别类型": PROJECT_TYPE_LABELS["Unclassified"],
+            "detected_type": "Unclassified",
+            "状态": "跳过",
+            "原因": f"暂不支持的文件类型：{ext or '未知'}",
+            "confidence": 0,
+            "size": size,
+        }
+
+    preferred_type = project_preferred_type_from_filename(display_name)
+    candidate_types = [preferred_type] if preferred_type else PROJECT_SPREADSHEET_TYPES
+    candidates = [project_validate_candidate(uploaded_file, file_type) for file_type in candidate_types]
+    valid_candidates = [item for item in candidates if item["valid"]]
+    if preferred_type and not valid_candidates:
+        fallback_types = [file_type for file_type in PROJECT_SPREADSHEET_TYPES if file_type != preferred_type]
+        fallback_candidates = [project_validate_candidate(uploaded_file, file_type) for file_type in fallback_types]
+        candidates.extend(fallback_candidates)
+        valid_candidates = [item for item in candidates if item["valid"]]
+    if not valid_candidates:
+        hint = max(candidates, key=lambda item: item["score"], default=None)
+        reason = hint["message"] if hint else "未匹配到支持的清单字段"
+        return {
+            "文件": display_name,
+            "识别类型": PROJECT_TYPE_LABELS["Unclassified"],
+            "detected_type": "Unclassified",
+            "状态": "需人工确认",
+            "原因": reason,
+            "confidence": 0,
+            "size": size,
+        }
+
+    preferred_candidates = [item for item in valid_candidates if item["file_type"] == preferred_type]
+    chosen = max(preferred_candidates or valid_candidates, key=lambda item: (item["score"], item["rows"], item["columns"]))
+    return {
+        "文件": display_name,
+        "识别类型": PROJECT_TYPE_LABELS[chosen["file_type"]],
+        "detected_type": chosen["file_type"],
+        "状态": "可加载",
+        "原因": f"字段校验通过；{chosen['rows']} 行，{chosen['columns']} 列",
+        "confidence": round(float(chosen["score"]), 2),
+        "size": size,
+    }
+
+def clear_project_imported_data():
+    for file_type in ["T030", "SKAT", "TrialBalance", "Samples", "T001K"]:
+        path = os.path.join(SESSION_DATA_DIR, f"{file_type}.csv")
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    st.session_state.base_files_ready = False
+    st.session_state.base_file_signature = None
+    st.session_state.trial_balance_ready = False
+    st.session_state.trial_balance_signature = None
+    st.session_state.t001k_ready = False
+    st.session_state.t001k_signature = None
+    st.session_state.mm03_image_names = []
+    st.session_state.mm03_records = []
+    st.session_state.mm03_signature = None
+    st.session_state.project_pending_mm03_sources = []
+    st.session_state.project_pending_voucher_sources = []
+    st.session_state.project_auto_mm03_attempted = False
+    st.session_state.project_auto_voucher_attempted = False
+    st.session_state.sample_table_records = []
+    st.session_state.sample_table_signature = None
+    st.session_state.ocr_samples = []
+    st.session_state.processed_image_names = set()
+    st.session_state.sample_source_scenarios = {}
+    st.session_state.audit_coverage_selected_keys = set()
+    st.session_state.audit_coverage_auto_seed_signature = None
+    st.session_state.results = None
+    st.session_state.scenario_preview = []
+    st.session_state.scenario_preview_schema_version = None
+
+def best_project_file(files):
+    return sorted(files or [], key=lambda item: item[0].get("confidence", 0), reverse=True)[0][1] if files else None
+
+def process_project_sample_files(sample_files):
+    account_descriptions = load_account_description_map(SESSION_DATA_DIR)
+    table_records = []
+    errors = []
+    for uploaded in sample_files or []:
+        try:
+            uploaded.seek(0)
+            is_valid, msg, s_df = DataValidator.validate_file(uploaded, "Samples")
+            uploaded.seek(0)
+        except Exception as exc:
+            is_valid, msg, s_df = False, str(exc), None
+        if not is_valid:
+            errors.append(f"{project_upload_display_name(uploaded)}: {msg}")
+            continue
+        s_df.columns = [str(col).strip().upper() for col in s_df.columns]
+        s_records = enrich_samples_with_account_descriptions(s_df.to_dict("records"), account_descriptions)
+        s_records = normalize_sample_preview_records(
+            s_records,
+            source_type="样本清单",
+            source_file=project_upload_display_name(uploaded),
+        )
+        s_records = apply_scenario_to_records(s_records, AUTO_SCENARIO_LABEL, st.session_state.scenario_preview)
+        table_records.extend(s_records)
+    return table_records, errors
+
+def process_project_mm03_images(mm03_images):
+    if not mm03_images:
+        return 0, []
+    ocr_engine = get_ocr_engine()
+    names = save_uploaded_images(mm03_images, "mm03")
+    records = []
+    errors = []
+    for uploaded, saved_name in zip(mm03_images, names):
+        try:
+            image_bytes = uploaded.getvalue()
+            parsed = ocr_engine.process_and_parse(image_bytes, llm_client=None)
+            if "error" in parsed:
+                record = parse_mm03_ocr_text("", saved_name)
+                record["ocr_status"] = parsed["error"]
+            else:
+                record = parse_mm03_ocr_text(parsed.get("OCR_TEXT", ""), saved_name)
+                record["ocr_status"] = "已解析"
+            records.append(record)
+        except Exception as exc:
+            errors.append(f"{project_upload_display_name(uploaded)}: {exc}")
+    st.session_state.mm03_image_names = names
+    st.session_state.mm03_records = records
+    st.session_state.mm03_signature = ("project-folder", upload_signature(mm03_images))
+    return len(records), errors
+
+def register_project_mm03_images(mm03_images):
+    if not mm03_images:
+        return 0, []
+    sources = save_project_image_sources(mm03_images, "mm03")
+    st.session_state.project_pending_mm03_sources = sources
+    st.session_state.mm03_image_names = [item["saved_name"] for item in sources]
+    st.session_state.mm03_records = []
+    st.session_state.mm03_signature = ("project-folder-deferred", upload_signature(mm03_images))
+    st.session_state.project_auto_mm03_attempted = False
+    return len(sources), []
+
+def process_pending_project_mm03_images():
+    sources = st.session_state.get("project_pending_mm03_sources") or []
+    if not sources:
+        return 0, []
+    ocr_engine = get_ocr_engine()
+    records = []
+    errors = []
+    for source in sources:
+        saved_name = source.get("saved_name", "")
+        try:
+            parsed = ocr_engine.process_and_parse(read_saved_image_bytes("mm03", saved_name), llm_client=None)
+            if "error" in parsed:
+                record = parse_mm03_ocr_text("", saved_name)
+                record["ocr_status"] = parsed["error"]
+            else:
+                record = parse_mm03_ocr_text(parsed.get("OCR_TEXT", ""), saved_name)
+                record["ocr_status"] = "已解析"
+            records.append(record)
+        except Exception as exc:
+            errors.append(f"{source.get('source_file') or saved_name}: {exc}")
+    st.session_state.mm03_records = records
+    st.session_state.mm03_image_names = [item.get("saved_name", "") for item in sources]
+    if records:
+        st.session_state.project_pending_mm03_sources = []
+    return len(records), errors
+
+def register_project_voucher_images(voucher_images):
+    if not voucher_images:
+        return 0, []
+    sources = save_project_image_sources(voucher_images, "vouchers")
+    st.session_state.project_pending_voucher_sources = sources
+    st.session_state.project_auto_voucher_attempted = False
+    return len(sources), []
+
+def process_voucher_image_sources(image_sources, selected_model):
+    if not image_sources:
+        return 0, []
+    ocr_engine = get_ocr_engine()
+    account_descriptions = load_account_description_map(SESSION_DATA_DIR)
+    llm_c = None
+    if DEFAULT_KEY:
+        from llm_client import LLMClient
+        llm_c = LLMClient(api_key=DEFAULT_KEY, model_name=selected_model)
+
+    added = 0
+    errors = []
+    existing_ids = {
+        f"{s.get('SOURCE_FILE')}_{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}"
+        for s in st.session_state.ocr_samples
+    }
+    for source in image_sources:
+        source_file = source.get("source_file", "")
+        try:
+            image_bytes = source.get("bytes")
+            if image_bytes is None:
+                image_bytes = read_saved_image_bytes(source.get("folder", "vouchers"), source.get("saved_name", ""))
+            res = ocr_engine.process_and_parse(image_bytes, llm_client=llm_c)
+            if "items" not in res:
+                errors.append(f"{source_file}: {res.get('error', '未识别到凭证明细')}")
+                continue
+            parsed_items = []
+            for item in res["items"]:
+                if item.get("DOC_NUM") and str(item.get("DOC_NUM")).lower() != "null":
+                    parsed_items.append(enrich_samples_with_account_descriptions([item], account_descriptions)[0])
+            parsed_items = normalize_sample_preview_records(
+                parsed_items,
+                source_type="凭证截图",
+                source_file=source_file,
+            )
+            parsed_items = apply_scenario_to_records(parsed_items, AUTO_SCENARIO_LABEL, st.session_state.scenario_preview)
+            for item in parsed_items:
+                item_id = f"{item.get('SOURCE_FILE')}_{item.get('DOC_NUM')}_{item.get('SAKNR')}_{item.get('AMOUNT')}_{item.get('DATE')}"
+                if item_id not in existing_ids:
+                    st.session_state.ocr_samples.append(item)
+                    existing_ids.add(item_id)
+                    added += 1
+            if source_file:
+                st.session_state.processed_image_names.add(source_file)
+        except Exception as exc:
+            errors.append(f"{source_file}: {exc}")
+    return added, errors
+
+def process_pending_project_voucher_images(selected_model):
+    sources = [
+        {
+            "source_file": source.get("source_file") or source.get("saved_name", ""),
+            "saved_name": source.get("saved_name", ""),
+            "folder": "vouchers",
+        }
+        for source in (st.session_state.get("project_pending_voucher_sources") or [])
+    ]
+    added, errors = process_voucher_image_sources(sources, selected_model)
+    if added:
+        st.session_state.project_pending_voucher_sources = []
+        st.session_state.ocr_samples_editor_nonce += 1
+    return added, errors
+
+def process_project_voucher_images(voucher_images, selected_model):
+    if not voucher_images:
+        return 0, []
+    sources = [
+        {
+            "source_file": project_upload_display_name(img),
+            "bytes": img.getvalue(),
+        }
+        for img in voucher_images
+    ]
+    return process_voucher_image_sources(sources, selected_model)
+
+def process_project_folder_upload(project_files, selected_model):
+    files = [file for file in (project_files or []) if file is not None]
+    if not files:
+        return {"loaded": False, "loaded_items": [], "warnings": ["未选择项目资料文件夹。"]}
+
+    signature = upload_signature(files)
+    if st.session_state.project_folder_loaded and signature == st.session_state.project_folder_signature:
+        return st.session_state.project_folder_summary
+
+    clear_project_imported_data()
+
+    manifest = []
+    grouped = {key: [] for key in PROJECT_TYPE_LABELS}
+    for uploaded in files:
+        info = classify_project_upload(uploaded)
+        manifest.append(info)
+        detected_type = info.get("detected_type")
+        if info.get("状态") == "可加载" and detected_type in grouped:
+            grouped[detected_type].append((info, uploaded))
+
+    st.session_state.project_folder_manifest = manifest
+    loaded_items = []
+    warnings = []
+
+    t030_file = best_project_file(grouped["T030"])
+    skat_file = best_project_file(grouped["SKAT"])
+    if t030_file and skat_file:
+        t030_ok, t030_msg = validate_upload_to_session(t030_file, "T030")
+        skat_ok, skat_msg = validate_upload_to_session(skat_file, "SKAT")
+        if t030_ok and skat_ok:
+            st.session_state.base_files_ready = True
+            st.session_state.base_file_signature = ("project-folder", signature, project_upload_display_name(t030_file), project_upload_display_name(skat_file))
+            refresh_scenario_preview()
+            loaded_items.append("T030/SKAT 场景映射")
+        else:
+            warnings.append(f"T030/SKAT 加载失败：T030={t030_msg}; SKAT={skat_msg}")
+    else:
+        warnings.append("未同时识别到 T030 与 SKAT，后续仍需补充自动过账配置和科目主数据。")
+
+    trial_balance_files = [uploaded for _, uploaded in grouped["TrialBalance"]]
+    if trial_balance_files:
+        is_valid, msg, file_count = validate_uploads_to_session(trial_balance_files, "TrialBalance")
+        if is_valid:
+            st.session_state.trial_balance_ready = True
+            st.session_state.trial_balance_signature = ("project-folder", signature, "TrialBalance", file_count)
+            if st.session_state.base_files_ready:
+                refresh_scenario_preview()
+            loaded_items.append(f"{file_count} 张余额/发生额表")
+        else:
+            warnings.append(f"余额/发生额表加载失败：{msg}")
+
+    t001k_file = best_project_file(grouped["T001K"])
+    if t001k_file:
+        t001k_ok, t001k_msg = validate_upload_to_session(t001k_file, "T001K")
+        if t001k_ok:
+            st.session_state.t001k_ready = True
+            st.session_state.t001k_signature = ("project-folder", signature, project_upload_display_name(t001k_file))
+            loaded_items.append("T001K 公司代码/评估分组")
+        else:
+            warnings.append(f"T001K 加载失败：{t001k_msg}")
+
+    sample_files = [uploaded for _, uploaded in grouped["Samples"]]
+    if sample_files:
+        table_records, sample_errors = process_project_sample_files(sample_files)
+        if sample_errors:
+            warnings.extend(sample_errors)
+        if table_records:
+            st.session_state.sample_table_records = table_records
+            st.session_state.sample_table_signature = ("project-folder", signature, "Samples", len(sample_files))
+            st.session_state.ocr_samples_editor_nonce += 1
+            loaded_items.append(f"{len(sample_files)} 个样本清单文件 / {len(table_records)} 行")
+
+    mm03_images = [uploaded for _, uploaded in grouped["MM03"]]
+    if mm03_images:
+        mm03_count, mm03_errors = register_project_mm03_images(mm03_images)
+        warnings.extend(mm03_errors)
+        if mm03_count:
+            loaded_items.append(f"{mm03_count} 张 MM03 截图（已登记，Step 3 按需解析）")
+
+    voucher_images = [uploaded for _, uploaded in grouped["VoucherImage"]]
+    if voucher_images:
+        voucher_count, voucher_errors = register_project_voucher_images(voucher_images)
+        warnings.extend(voucher_errors)
+        if voucher_count:
+            loaded_items.append(f"{voucher_count} 张凭证截图（已登记，Step 3 按需 OCR）")
+
+    combined_records = st.session_state.sample_table_records + st.session_state.ocr_samples
+    if combined_records and st.session_state.scenario_preview:
+        sync_source_scenarios_from_records(combined_records, scenario_names_from_preview())
+
+    summary = {
+        "loaded": True,
+        "loaded_items": loaded_items,
+        "warnings": warnings,
+        "file_count": len(files),
+        "recognized_count": sum(1 for item in manifest if item.get("detected_type") != "Unclassified"),
+    }
+    st.session_state.project_folder_loaded = True
+    st.session_state.project_folder_signature = signature
+    st.session_state.project_folder_summary = summary
+    return summary
+
+def render_project_folder_status():
+    manifest = st.session_state.get("project_folder_manifest") or []
+    summary = st.session_state.get("project_folder_summary") or {}
+    if not manifest and not summary:
+        return
+
+    loaded_items = summary.get("loaded_items") or []
+    warnings = summary.get("warnings") or []
+    if loaded_items:
+        st.success("项目资料包已自动加载：" + "、".join(loaded_items))
+    if warnings:
+        st.warning("；".join(warnings[:6]))
+    if manifest:
+        with st.expander("查看项目资料包自动识别结果", expanded=True):
+            manifest_df = pd.DataFrame(manifest)
+            display_cols = ["文件", "识别类型", "状态", "原因"]
+            for col in display_cols:
+                if col not in manifest_df.columns:
+                    manifest_df[col] = ""
+            st.dataframe(manifest_df[display_cols], width="stretch", hide_index=True)
 
 def refresh_scenario_preview():
     ranked = Core1Orchestrator(SESSION_DATA_DIR).run()
@@ -685,8 +1203,509 @@ def valid_sample_scenarios(records, scenario_options):
             invalid.append(idx)
     return invalid
 
+SCENARIO_PROCESS_GROUPS = {
+    "销售发货": "销售与收款",
+    "销售入账": "销售与收款",
+    "销售成本结转": "销售与收款",
+    "收款核销": "销售与收款",
+    "采购收货": "采购与付款",
+    "采购入账": "采购与付款",
+    "生产领料": "存货与生产成本",
+    "完工入库": "存货与生产成本",
+    "工单差异": "存货与生产成本",
+    "产成品差异": "存货与生产成本",
+}
+
+def process_group_for_scenario(scenario_name):
+    return SCENARIO_PROCESS_GROUPS.get(str(scenario_name or "").strip(), "其他")
+
+def split_meta_values(value):
+    text = str(value or "").strip()
+    if not text:
+        return []
+    parts = re.split(r"\s*/\s*|[;,，；]+", text)
+    cleaned = []
+    for part in parts:
+        item = part.strip()
+        if item and item.lower() not in {"nan", "none", "null"} and item not in cleaned:
+            cleaned.append(item)
+    return cleaned
+
+def scenario_account_detail_lookup(ranked):
+    lookup = {}
+    for scenario in ranked or []:
+        scenario_name = str(scenario.get("name", "") or "").strip()
+        for detail in scenario.get("account_details", []) or []:
+            account_code = str(detail.get("account", "") or "").strip()
+            if scenario_name and account_code:
+                lookup[(scenario_name, account_code)] = detail
+    return lookup
+
+def subscenario_labels_for_detail(scenario_name, account_code="", description="", detail=None):
+    scenario_name = str(scenario_name or "").strip()
+    account_code = str(account_code or "").strip()
+    description = str(description or "").strip()
+    detail = detail or {}
+    ktosl_values = {item.upper() for item in split_meta_values(detail.get("ktosl"))}
+    komok_values = {item.upper() for item in split_meta_values(detail.get("komok"))}
+    labels = []
+
+    def add(label):
+        if label and label not in labels:
+            labels.append(label)
+
+    if scenario_name == "销售发货":
+        if {"VAX", "VAY"} & komok_values or "GBB" in ktosl_values:
+            add("销售发货成本过账")
+        if "GISS" in ktosl_values:
+            add("销售发货消耗")
+    elif scenario_name == "销售入账":
+        if "REV" in ktosl_values:
+            add("收入确认")
+        if "MWS" in ktosl_values:
+            add("销项税确认")
+        if "AKTY" in ktosl_values:
+            add("销售应收/暂估")
+    elif scenario_name == "销售成本结转":
+        if {"VAX", "VAY"} & komok_values or "GBB" in ktosl_values:
+            add("销售成本结转")
+    elif scenario_name == "收款核销":
+        add("收款清账")
+    elif scenario_name == "采购收货":
+        if "WRX" in ktosl_values or "GR/IR" in description.upper():
+            add("GR/IR 暂估")
+        if "BSX" in ktosl_values or any(word in description for word in ["原材料", "库存商品", "半成品", "包装物", "周转材料"]):
+            add("存货入库")
+    elif scenario_name == "采购入账":
+        if "WRX" in ktosl_values or "GR/IR" in description.upper():
+            add("GR/IR 清账")
+        if "VST" in ktosl_values or "进项" in description:
+            add("进项税确认")
+        if "AKTP" in ktosl_values or "应付" in description:
+            add("应付入账")
+    elif scenario_name == "生产领料":
+        if {"VBO", "VBR"} & komok_values or "GBB" in ktosl_values:
+            add("生产领料消耗")
+        if "BSX" in ktosl_values:
+            add("库存转出")
+    elif scenario_name == "完工入库":
+        if "AUF" in komok_values or account_code.startswith(("500108", "500109")):
+            add("生产成本完工转出")
+        if "BSX" in ktosl_values or any(word in description for word in ["库存商品", "半成品"]):
+            add("产成品/半成品入库")
+    elif scenario_name == "工单差异":
+        if "PRD" in ktosl_values:
+            if "采购" in description:
+                add("采购差异")
+            if "转物料" in description or "物料转" in description:
+                add("物料转物料差异")
+            if "跨工厂" in description:
+                add("跨工厂转移差异")
+            if "产出" in description:
+                add("产出差异")
+            add("工单差异")
+        if "AUF" in komok_values:
+            add("完工结转差异")
+    elif scenario_name == "产成品差异":
+        if "UMSK" in ktosl_values or "转物料" in description or "物料转" in description:
+            add("物料转物料差异")
+        if "PRA" in komok_values:
+            add("产成品采购差异")
+
+    if not labels and detail:
+        ktosl_text = " / ".join(split_meta_values(detail.get("ktosl")))
+        komok_text = " / ".join(split_meta_values(detail.get("komok")))
+        if ktosl_text and komok_text:
+            add(f"{ktosl_text}-{komok_text}")
+        elif ktosl_text:
+            add(ktosl_text)
+    if not labels:
+        add(scenario_name or "未分类子场景")
+    return labels
+
+def subscenario_labels_for_summary_row(summary_row, ranked):
+    detail = scenario_account_detail_lookup(ranked).get((
+        str(summary_row.get("scenario", "") or "").strip(),
+        str(summary_row.get("account", "") or "").strip(),
+    ), {})
+    return subscenario_labels_for_detail(
+        summary_row.get("scenario"),
+        summary_row.get("account"),
+        summary_row.get("description"),
+        detail,
+    )
+
+def label_chips_html(labels, class_name="subscenario-chip"):
+    return "".join(
+        f"<span class='{class_name}'>{html.escape(str(label))}</span>"
+        for label in labels or []
+    )
+
+def build_scenario_coverage_items(ranked, direction_filter="全部"):
+    rows = []
+    summary_rows = build_scenario_account_totals(ranked, direction_filter=direction_filter)
+    overall_total = sum(float(row.get("total_value", 0) or 0) for row in summary_rows)
+    for row in summary_rows:
+        amount = float(row.get("total_value", 0) or 0)
+        if not amount:
+            continue
+        scenario_name = str(row.get("scenario", "") or "").strip()
+        account_code = str(row.get("account", "") or "").strip()
+        subscenario_labels = subscenario_labels_for_summary_row(row, ranked)
+        key_src = f"{scenario_name}|{account_code}|{';'.join(subscenario_labels)}|{direction_filter}"
+        coverage_key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
+        rows.append({
+            "覆盖项ID": coverage_key,
+            "流程分类": process_group_for_scenario(scenario_name),
+            "审计场景": scenario_name,
+            "子场景标签": "；".join(subscenario_labels),
+            "科目编码": account_code,
+            "科目描述": str(row.get("description", "") or "").strip(),
+            "金额": amount,
+            "占整体": (amount / overall_total * 100) if overall_total else 0.0,
+            "占场景": float(row.get("amount_share_pct", 0) or 0),
+            "命中公司数": int(row.get("company_count", 0) or 0),
+            "是否额外科目": "是" if int(row.get("extra_company_count", 0) or 0) else "否",
+        })
+    return pd.DataFrame(rows)
+
+def build_subscenario_rank_rows(coverage_df):
+    if coverage_df.empty:
+        return pd.DataFrame()
+    expanded_rows = []
+    scenario_totals = coverage_df.groupby("审计场景")["金额"].sum().to_dict()
+    overall_total = float(coverage_df["金额"].sum())
+    for _, row in coverage_df.iterrows():
+        labels = [label.strip() for label in str(row.get("子场景标签", "")).split("；") if label.strip()]
+        if not labels:
+            labels = ["未分类子场景"]
+        allocated_amount = float(row.get("金额", 0) or 0) / len(labels)
+        for label in labels:
+            expanded_rows.append({
+                "审计场景": row.get("审计场景"),
+                "子场景": label,
+                "金额": allocated_amount,
+            })
+    expanded_df = pd.DataFrame(expanded_rows)
+    grouped = expanded_df.groupby(["审计场景", "子场景"], as_index=False)["金额"].sum()
+    grouped["占整体"] = grouped["金额"].apply(lambda value: (float(value) / overall_total * 100) if overall_total else 0.0)
+    grouped["占场景"] = grouped.apply(
+        lambda row: (float(row["金额"]) / float(scenario_totals.get(row["审计场景"], 0) or 0) * 100)
+        if scenario_totals.get(row["审计场景"]) else 0.0,
+        axis=1,
+    )
+    return grouped.sort_values("金额", ascending=False)
+
+def render_testing_coverage_dashboard(ranked):
+    coverage_df = build_scenario_coverage_items(ranked)
+    if coverage_df.empty:
+        return
+
+    st.markdown(
+        """
+        <style>
+        .coverage-hero-card {
+            border: 1px solid #d7e2f0;
+            border-radius: 8px;
+            background: #ffffff;
+            padding: 18px 20px;
+            min-height: 228px;
+            box-shadow: 0 6px 18px rgba(0, 51, 141, 0.08);
+        }
+        .coverage-hero-label {
+            color: #4d5a6a;
+            font-weight: 700;
+            font-size: 14px;
+        }
+        .coverage-hero-value {
+            color: #00338d;
+            font-weight: 800;
+            font-size: 52px;
+            line-height: 1.05;
+            margin-top: 6px;
+        }
+        .coverage-hero-sub {
+            color: #0b6f6d;
+            font-weight: 700;
+            margin-top: 6px;
+        }
+        .coverage-hero-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-top: 16px;
+            color: #4d5a6a;
+            font-size: 13px;
+        }
+        .coverage-hero-grid span {
+            display: flex;
+            justify-content: space-between;
+            border-top: 1px solid #edf1f7;
+            padding-top: 7px;
+        }
+        .process-card-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin: 10px 0 16px 0;
+        }
+        .process-card {
+            background: #00338D;
+            border-radius: 8px;
+            padding: 14px 16px;
+            color: #ffffff;
+            min-height: 112px;
+            box-shadow: 0 6px 18px rgba(0, 51, 141, 0.12);
+        }
+        .process-card:nth-child(1) { background: #00338D; }
+        .process-card:nth-child(2) { background: #005EB8; }
+        .process-card:nth-child(3) { background: #007C89; }
+        .process-card:nth-child(4) { background: #2E2E2E; }
+        .process-card-title {
+            font-size: 18px;
+            font-weight: 800;
+            margin-bottom: 6px;
+        }
+        .process-card-amount {
+            font-size: 20px;
+            font-weight: 800;
+            margin-bottom: 8px;
+        }
+        .process-card-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 12px;
+            opacity: 0.95;
+        }
+        .coverage-status {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-weight: 800;
+            font-size: 13px;
+            margin-top: 10px;
+        }
+        .coverage-status-ok {
+            color: #006341;
+            background: #E4F4EC;
+            border: 1px solid #A6D9BE;
+        }
+        .coverage-status-gap {
+            color: #8A5A00;
+            background: #FFF4D8;
+            border: 1px solid #F1C66A;
+        }
+        @media (max-width: 1100px) {
+            .process-card-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 720px) {
+            .process-card-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("### 审计测试覆盖 Dashboard")
+    st.caption("按 10 个测试场景和子场景颗粒度选择拟测试范围，实时查看已选项目覆盖整体金额的比例。流程分类仅用于阅读，不作为聚合口径。")
+
+    scenario_rank = (
+        coverage_df.groupby("审计场景", as_index=False)["金额"]
+        .sum()
+        .sort_values("金额", ascending=False)
+    )
+    total_amount = float(coverage_df["金额"].sum())
+    scenario_rank["占整体"] = scenario_rank["金额"].apply(lambda value: (float(value) / total_amount * 100) if total_amount else 0.0)
+    subscenario_rank = build_subscenario_rank_rows(coverage_df)
+    selected_keys = set(st.session_state.get("audit_coverage_selected_keys", set()))
+
+    control_cols = st.columns([1.3, 1, 1, 1.2])
+    target_pct = int(control_cols[0].slider(
+        "最低风险覆盖要求",
+        min_value=0,
+        max_value=100,
+        step=5,
+        key="audit_coverage_target_pct",
+    ))
+    target_amount = total_amount * target_pct / 100 if total_amount else 0.0
+    coverage_signature = tuple(coverage_df["覆盖项ID"].astype(str).tolist())
+    if (
+        not selected_keys
+        and target_pct > 0
+        and st.session_state.get("audit_coverage_auto_seed_signature") != coverage_signature
+    ):
+        auto_keys = set()
+        auto_amount = 0.0
+        for _, row in coverage_df.sort_values("金额", ascending=False).iterrows():
+            if auto_amount >= target_amount:
+                break
+            auto_keys.add(str(row["覆盖项ID"]))
+            auto_amount += float(row.get("金额", 0) or 0)
+        st.session_state.audit_coverage_selected_keys = auto_keys
+        st.session_state.audit_coverage_auto_seed_signature = coverage_signature
+        selected_keys = auto_keys
+    if control_cols[1].button("选择 Top 5 覆盖项", width="stretch"):
+        st.session_state.audit_coverage_selected_keys = set(
+            coverage_df.sort_values("金额", ascending=False).head(5)["覆盖项ID"].astype(str)
+        )
+        st.session_state.audit_coverage_auto_seed_signature = coverage_signature
+        st.rerun()
+    if control_cols[2].button("补足至目标覆盖率", width="stretch"):
+        updated_keys = set(selected_keys)
+        current_amount = float(coverage_df[coverage_df["覆盖项ID"].astype(str).isin(updated_keys)]["金额"].sum())
+        for _, row in coverage_df[~coverage_df["覆盖项ID"].astype(str).isin(updated_keys)].sort_values("金额", ascending=False).iterrows():
+            if current_amount >= target_amount:
+                break
+            updated_keys.add(str(row["覆盖项ID"]))
+            current_amount += float(row.get("金额", 0) or 0)
+        st.session_state.audit_coverage_selected_keys = updated_keys
+        st.session_state.audit_coverage_auto_seed_signature = coverage_signature
+        st.rerun()
+    if control_cols[3].button("清空选择", width="stretch"):
+        st.session_state.audit_coverage_selected_keys = set()
+        st.session_state.audit_coverage_auto_seed_signature = coverage_signature
+        st.rerun()
+    process_cards_slot = st.empty()
+
+    layout_cols = st.columns([1.25, 0.75])
+    with layout_cols[0]:
+        st.markdown("**大场景金额占比排名**")
+        st.bar_chart(scenario_rank.set_index("审计场景")["金额"])
+        sub_display = subscenario_rank.head(10).copy()
+        display_count = len(sub_display)
+        st.markdown(f"**子场景占比排名 Top {display_count}**")
+        if display_count < 10:
+            st.caption(f"当前筛选范围内只有 {display_count} 个可归类子场景，因此未显示满 10 条。")
+        sub_display["金额"] = sub_display["金额"].map(lambda value: f"{float(value):,.2f}")
+        sub_display["占整体"] = sub_display["占整体"].map(lambda value: f"{float(value):.2f}%")
+        sub_display["占场景"] = sub_display["占场景"].map(lambda value: f"{float(value):.2f}%")
+        st.dataframe(sub_display, width="stretch", hide_index=True)
+
+    hero_slot = layout_cols[1].empty()
+    editor_df = coverage_df.copy()
+    editor_df.insert(0, "纳入测试范围", editor_df["覆盖项ID"].astype(str).isin(selected_keys))
+    editor_df["金额"] = editor_df["金额"].round(2)
+    editor_df["占整体"] = editor_df["占整体"].round(2)
+    editor_df["占场景"] = editor_df["占场景"].round(2)
+    editor_cols = [
+        "纳入测试范围", "覆盖项ID", "流程分类", "审计场景", "子场景标签",
+        "科目编码", "科目描述", "金额", "占整体", "占场景", "命中公司数", "是否额外科目",
+    ]
+    edited_df = st.data_editor(
+        editor_df[editor_cols],
+        width="stretch",
+        hide_index=True,
+        key="audit_coverage_editor",
+        column_config={
+            "覆盖项ID": None,
+            "纳入测试范围": st.column_config.CheckboxColumn("已选"),
+            "金额": st.column_config.NumberColumn("金额", format="%.2f"),
+            "占整体": st.column_config.NumberColumn("占整体 %", format="%.2f"),
+            "占场景": st.column_config.NumberColumn("占场景 %", format="%.2f"),
+        },
+        disabled=[col for col in editor_cols if col != "纳入测试范围"],
+    )
+    selected_keys = set(edited_df.loc[edited_df["纳入测试范围"], "覆盖项ID"].astype(str))
+    st.session_state.audit_coverage_selected_keys = selected_keys
+    selected_df = coverage_df[coverage_df["覆盖项ID"].astype(str).isin(selected_keys)]
+    selected_amount = float(selected_df["金额"].sum()) if not selected_df.empty else 0.0
+    selected_pct = (selected_amount / total_amount * 100) if total_amount else 0.0
+    selected_scenarios = int(selected_df["审计场景"].nunique()) if not selected_df.empty else 0
+    selected_subscenarios = len({
+        label.strip()
+        for labels in selected_df["子场景标签"].tolist()
+        for label in str(labels).split("；")
+        if label.strip()
+    }) if not selected_df.empty else 0
+    achieved_target = selected_pct >= target_pct
+    gap_amount = max(target_amount - selected_amount, 0.0)
+
+    process_stats = (
+        coverage_df.groupby("流程分类", as_index=False)
+        .agg(金额=("金额", "sum"), 覆盖项=("覆盖项ID", "count"), 场景=("审计场景", "nunique"))
+        .sort_values("金额", ascending=False)
+    )
+    selected_process_amounts = (
+        selected_df.groupby("流程分类")["金额"].sum().to_dict()
+        if not selected_df.empty else {}
+    )
+    process_cards = []
+    for _, row in process_stats.iterrows():
+        process_name = str(row["流程分类"] or "其他")
+        process_amount = float(row["金额"] or 0)
+        selected_process_amount = float(selected_process_amounts.get(process_name, 0) or 0)
+        process_selected_pct = (selected_process_amount / process_amount * 100) if process_amount else 0.0
+        process_cards.append(
+            "<div class='process-card'>"
+            f"<div class='process-card-title'>{html.escape(process_name)}</div>"
+            f"<div class='process-card-amount'>{process_amount:,.0f}</div>"
+            "<div class='process-card-meta'>"
+            f"<span>{int(row['场景'])} 个场景</span>"
+            f"<span>{int(row['覆盖项'])} 个覆盖项</span>"
+            f"<span>已选 {process_selected_pct:.1f}%</span>"
+            "</div>"
+            "</div>"
+        )
+    with process_cards_slot.container():
+        st.markdown("**流程维度概览**")
+        st.markdown(
+            f"<div class='process-card-grid'>{''.join(process_cards)}</div>",
+            unsafe_allow_html=True,
+        )
+
+    with hero_slot.container():
+        status_class = "coverage-status-ok" if achieved_target else "coverage-status-gap"
+        status_text = "已达到最低风险要求" if achieved_target else "未达到最低风险要求"
+        gap_text = "无需补足" if achieved_target else f"还需覆盖 {gap_amount:,.2f}"
+        st.markdown(
+            f"""
+            <div class="coverage-hero-card">
+                <div class="coverage-hero-label">当前已选覆盖率</div>
+                <div class="coverage-hero-value">{selected_pct:.2f}%</div>
+                <div class="coverage-hero-sub">已选金额 {selected_amount:,.2f}</div>
+                <div class="coverage-status {status_class}">{status_text}</div>
+                <div class="coverage-hero-grid">
+                    <span>最低要求 <strong>{target_pct}%</strong></span>
+                    <span>覆盖缺口 <strong>{gap_text}</strong></span>
+                    <span>已选覆盖项 <strong>{len(selected_keys)}</strong></span>
+                    <span>覆盖场景 <strong>{selected_scenarios}</strong></span>
+                    <span>覆盖子场景 <strong>{selected_subscenarios}</strong></span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if not selected_df.empty:
+            selected_brief = selected_df[["审计场景", "子场景标签", "科目编码", "占整体"]].copy()
+            selected_brief["占整体"] = selected_brief["占整体"].map(lambda value: f"{float(value):.2f}%")
+            st.dataframe(selected_brief.head(8), width="stretch", hide_index=True)
+
+    unselected_df = coverage_df[~coverage_df["覆盖项ID"].astype(str).isin(selected_keys)].sort_values("金额", ascending=False)
+    if not unselected_df.empty:
+        unselected_display = unselected_df.head(10).copy()
+        unselected_count = len(unselected_display)
+        st.markdown(f"**未选择测试范围金额排名 Top {unselected_count}**")
+        if not achieved_target:
+            st.caption("以下项目尚未纳入测试范围，可优先补选以满足最低风险覆盖要求。")
+        else:
+            st.caption("已达到当前覆盖要求；下列项目为尚未纳入测试范围的剩余重大项目。")
+        unselected_cols = ["流程分类", "审计场景", "子场景标签", "科目编码", "科目描述", "金额", "占整体", "占场景", "是否额外科目"]
+        unselected_display = unselected_display[unselected_cols]
+        unselected_display["金额"] = unselected_display["金额"].map(lambda value: f"{float(value):,.2f}")
+        unselected_display["占整体"] = unselected_display["占整体"].map(lambda value: f"{float(value):.2f}%")
+        unselected_display["占场景"] = unselected_display["占场景"].map(lambda value: f"{float(value):.2f}%")
+        st.dataframe(unselected_display, width="stretch", hide_index=True)
+    else:
+        st.success("所有覆盖项均已纳入测试范围。")
+
 def build_audit_dashboard_rows(ranked):
     rows = []
+    detail_lookup = scenario_account_detail_lookup(ranked)
     for scenario in ranked or []:
         scenario_name = str(scenario.get("name", "") or "").strip()
         baseline_company = str(scenario.get("baseline_company_code", "") or "").strip()
@@ -698,11 +1717,16 @@ def build_audit_dashboard_rows(ranked):
                 total_value = float(amount_for_direction(account, "全部") or 0)
                 if not (debit_value or credit_value or total_value):
                     continue
+                account_code = str(account.get("account", "") or "").strip()
+                description = str(account.get("description", "未知科目") or "未知科目").strip()
+                detail = detail_lookup.get((scenario_name, account_code), {})
                 rows.append({
+                    "流程分类": process_group_for_scenario(scenario_name),
                     "审计场景": scenario_name,
                     "公司代码": company_code,
-                    "科目编码": str(account.get("account", "") or "").strip(),
-                    "科目描述": str(account.get("description", "未知科目") or "未知科目").strip(),
+                    "子场景标签": "；".join(subscenario_labels_for_detail(scenario_name, account_code, description, detail)),
+                    "科目编码": account_code,
+                    "科目描述": description,
                     "借方金额": debit_value,
                     "贷方金额": credit_value,
                     "合计金额": total_value,
@@ -716,10 +1740,14 @@ def build_config_mapping_rows(ranked):
     for scenario in ranked or []:
         scenario_name = str(scenario.get("name", "") or "").strip()
         for detail in scenario.get("account_details", []) or []:
+            account_code = str(detail.get("account", "") or "").strip()
+            description = str(detail.get("description", "未知科目") or "未知科目").strip()
             rows.append({
+                "流程分类": process_group_for_scenario(scenario_name),
                 "审计场景": scenario_name,
-                "科目编码": str(detail.get("account", "") or "").strip(),
-                "科目描述": str(detail.get("description", "未知科目") or "未知科目").strip(),
+                "子场景标签": "；".join(subscenario_labels_for_detail(scenario_name, account_code, description, detail)),
+                "科目编码": account_code,
+                "科目描述": description,
                 "配置借贷方": str(detail.get("direction", "") or "").strip(),
                 "匹配状态": "未匹配科目名称" if "未知科目" in str(detail.get("description", "")) else "已匹配",
             })
@@ -727,7 +1755,9 @@ def build_config_mapping_rows(ranked):
             for account in scenario.get("accounts", []) or []:
                 account_text = str(account)
                 rows.append({
+                    "流程分类": process_group_for_scenario(scenario_name),
                     "审计场景": scenario_name,
+                    "子场景标签": "；".join(subscenario_labels_for_detail(scenario_name, account_text.split(" ")[0], account_text, {})),
                     "科目编码": account_text.split(" ")[0],
                     "科目描述": account_text,
                     "配置借贷方": "",
@@ -831,56 +1861,56 @@ def render_general_audit_dashboard(ranked):
     st.markdown("**审计价值摘要**")
     st.info("\n\n".join(summary_lines))
 
-    filter_cols = st.columns([1.3, 1.3, 1, 1])
-    selected_scenarios = filter_cols[0].multiselect(
-        "审计场景",
-        sorted(dashboard_df["审计场景"].dropna().unique()),
-        default=[],
-        placeholder="全部场景",
-    )
-    selected_companies = filter_cols[1].multiselect(
-        "公司代码",
-        sorted(dashboard_df["公司代码"].dropna().unique()),
-        default=[],
-        placeholder="全部公司",
-    )
-    extra_only = filter_cols[2].checkbox("只看额外科目")
-    min_amount = filter_cols[3].number_input("金额阈值", min_value=0.0, value=0.0, step=10000.0)
+    render_testing_coverage_dashboard(ranked)
 
-    filtered = dashboard_df.copy()
-    if selected_scenarios:
-        filtered = filtered[filtered["审计场景"].isin(selected_scenarios)]
-    if selected_companies:
-        filtered = filtered[filtered["公司代码"].isin(selected_companies)]
-    if extra_only:
-        filtered = filtered[filtered["是否额外科目"] == "是"]
-    if min_amount:
-        filtered = filtered[filtered["合计金额"].abs() >= float(min_amount)]
+    with st.expander("原始审计影响明细（可选）", expanded=False):
+        filter_cols = st.columns([1.3, 1.3, 1, 1])
+        selected_scenarios = filter_cols[0].multiselect(
+            "审计场景",
+            sorted(dashboard_df["审计场景"].dropna().unique()),
+            default=[],
+            placeholder="全部场景",
+            key="raw_detail_scenarios",
+        )
+        selected_companies = filter_cols[1].multiselect(
+            "公司代码",
+            sorted(dashboard_df["公司代码"].dropna().unique()),
+            default=[],
+            placeholder="全部公司",
+            key="raw_detail_companies",
+        )
+        extra_only = filter_cols[2].checkbox("只看额外科目", key="raw_detail_extra_only")
+        min_amount = filter_cols[3].number_input("金额阈值", min_value=0.0, value=0.0, step=10000.0, key="raw_detail_min_amount")
 
-    available_columns = [
-        "审计场景", "公司代码", "科目编码", "科目描述",
-        "合计金额", "借方金额", "贷方金额", "是否额外科目", "基准公司",
-    ]
-    default_columns = ["审计场景", "公司代码", "科目编码", "科目描述", "合计金额", "是否额外科目"]
-    selected_columns = st.multiselect("显示字段", available_columns, default=default_columns)
-    if not selected_columns:
-        selected_columns = default_columns
+        filtered = dashboard_df.copy()
+        if selected_scenarios:
+            filtered = filtered[filtered["审计场景"].isin(selected_scenarios)]
+        if selected_companies:
+            filtered = filtered[filtered["公司代码"].isin(selected_companies)]
+        if extra_only:
+            filtered = filtered[filtered["是否额外科目"] == "是"]
+        if min_amount:
+            filtered = filtered[filtered["合计金额"].abs() >= float(min_amount)]
 
-    chart_cols = st.columns([1.2, 1])
-    with chart_cols[0]:
-        st.markdown("**场景金额排行**")
-        st.bar_chart(scenario_totals.set_index("审计场景")["合计金额"])
-    with chart_cols[1]:
-        st.markdown("**重点科目贡献 Top 5**")
-        top_accounts["合计金额"] = top_accounts["合计金额"].map(lambda value: f"{float(value):,.2f}")
-        st.dataframe(top_accounts, width="stretch", hide_index=True)
+        available_columns = [
+            "流程分类", "审计场景", "子场景标签", "公司代码", "科目编码", "科目描述",
+            "合计金额", "借方金额", "贷方金额", "是否额外科目", "基准公司",
+        ]
+        default_columns = ["审计场景", "子场景标签", "公司代码", "科目编码", "科目描述", "合计金额", "是否额外科目"]
+        selected_columns = st.multiselect(
+            "显示字段",
+            available_columns,
+            default=default_columns,
+            key="raw_detail_columns",
+        )
+        if not selected_columns:
+            selected_columns = default_columns
 
-    st.markdown("**可筛选审计明细**")
-    display_df = filtered[selected_columns].copy()
-    for amount_col in ["合计金额", "借方金额", "贷方金额"]:
-        if amount_col in display_df.columns:
-            display_df[amount_col] = display_df[amount_col].map(lambda value: f"{float(value):,.2f}")
-    st.dataframe(display_df, width="stretch", hide_index=True)
+        display_df = filtered[selected_columns].copy()
+        for amount_col in ["合计金额", "借方金额", "贷方金额"]:
+            if amount_col in display_df.columns:
+                display_df[amount_col] = display_df[amount_col].map(lambda value: f"{float(value):,.2f}")
+        st.dataframe(display_df, width="stretch", hide_index=True)
 
     with st.expander("技术明细：配置映射、公司维度金额和借贷拆分", expanded=False):
         render_scenario_preview(ranked, show_amount=True)
@@ -986,6 +2016,8 @@ def render_scenario_preview(ranked, show_amount=False):
                 if int(row.get("extra_company_count", 0) or 0) else ""
             )
             company_codes_text = "、".join(str(code) for code in row.get("company_codes", []))
+            subscenario_labels = subscenario_labels_for_summary_row(row, ranked)
+            subscenario_html = label_chips_html(subscenario_labels)
             breakdown = summary_breakdown_for_row(row)
             company_amount_rows = []
             for company_amount in breakdown.get("company_amounts", []):
@@ -1004,6 +2036,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 "<details class='summary-account-row'>"
                 "<summary class='summary-row-grid'>"
                 f"<span class='scenario-name'>{html.escape(str(row.get('scenario', '')))}</span>"
+                f"<span class='subscenario-cell'>{subscenario_html}</span>"
                 f"<span class='summary-account-code'>{html.escape(str(row.get('account', '')))}</span>"
                 f"<span>{html.escape(str(row.get('description', '未知科目')))}</span>"
                 f"<span class='amount'>{float(row.get('total_value', 0) or 0):,.2f}</span>"
@@ -1030,7 +2063,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 "<section class='scenario-total-summary'>"
                 "<div class='summary-title'>场景科目总金额汇总 <span class='summary-subtitle'>点击科目行展开借贷明细</span></div>"
                 "<div class='summary-row-grid summary-header'>"
-                "<span>审计场景</span><span>科目编码</span><span>科目描述</span><span class='amount'>总金额</span><span class='amount-share'>占比</span><span>命中公司数</span><span>提示</span>"
+                "<span>审计场景</span><span>子场景标签</span><span>科目编码</span><span>科目描述</span><span class='amount'>总金额</span><span class='amount-share'>占比</span><span>命中公司数</span><span>提示</span>"
                 "</div>"
                 f"<div class='summary-accordion'>{''.join(summary_rows)}</div>"
                 "</section>"
@@ -1127,10 +2160,10 @@ def render_scenario_preview(ranked, show_amount=False):
             }}
             .summary-row-grid {{
                 display: grid;
-                grid-template-columns: minmax(150px, 1.1fr) minmax(130px, .9fr) minmax(260px, 2.2fr) minmax(140px, .9fr) minmax(90px, .6fr) minmax(100px, .7fr) minmax(120px, .8fr);
+                grid-template-columns: minmax(140px, .9fr) minmax(180px, 1.1fr) minmax(130px, .75fr) minmax(260px, 1.8fr) minmax(140px, .85fr) minmax(90px, .55fr) minmax(100px, .65fr) minmax(120px, .75fr);
                 align-items: center;
                 gap: 0;
-                min-width: 1080px;
+                min-width: 1280px;
             }}
             .summary-header {{
                 color: #4d5a6a;
@@ -1182,6 +2215,25 @@ def render_scenario_preview(ranked, show_amount=False):
             }}
             .summary-account-row summary .scenario-name {{
                 padding-left: 26px;
+            }}
+            .subscenario-cell {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px;
+                align-items: center;
+            }}
+            .subscenario-chip {{
+                display: inline-flex;
+                align-items: center;
+                border-radius: 999px;
+                padding: 3px 8px;
+                background: #eef7f7;
+                color: #005e5d;
+                border: 1px solid #c9e7e6;
+                font-size: 12px;
+                font-weight: 700;
+                line-height: 1.35;
+                white-space: nowrap;
             }}
             .summary-side-panel {{
                 background: #f8fbff;
@@ -1506,7 +2558,7 @@ header_html = f"""
     <div style="display: flex; align-items: center;">
         <img src="data:image/png;base64,{logo_b64}" class="kpmg-header-logo">
         <div style="display: flex; flex-direction: column; justify-content: center;">
-            <span class="kpmg-main-title">SAP 自动分录审计分析与底稿生成平台</span>
+            <span class="kpmg-main-title">TSDA 测试范围框定辅助驾驶舱</span>
             <span class="kpmg-sub-title">面向财务审计与 IT 审计的自动过账、科目归集和样本证据分析工具</span>
         </div>
     </div>
@@ -1575,6 +2627,10 @@ if st.session_state.results:
             st.session_state.mm03_image_names = []
             st.session_state.mm03_records = []
             st.session_state.mm03_signature = None
+            st.session_state.project_folder_loaded = False
+            st.session_state.project_folder_signature = None
+            st.session_state.project_folder_manifest = []
+            st.session_state.project_folder_summary = {}
             st.session_state.scenario_preview = []
             st.session_state.scenario_preview_schema_version = None
             st.rerun()
@@ -1589,6 +2645,17 @@ st.progress(st.session_state.current_step / 3.0)
 # --- STEP 1 ---
 if st.session_state.current_step == 1:
     st.subheader("步骤 1: 设置审计项目背景")
+    st.markdown("**一键上传项目资料文件夹（推荐）**")
+    st.caption("可直接选择项目文件夹，系统会自动识别并加载 T030、SKAT、余额/发生额表、T001K、样本清单、MM03 截图和凭证截图；后续步骤只需查看、筛选和必要时补充。")
+    project_folder_files = st.file_uploader(
+        "选择项目资料文件夹",
+        type=["csv", "xlsx", "xls", "txt", "jpg", "jpeg", "png"],
+        accept_multiple_files="directory",
+        key="project_folder_uploader",
+        label_visibility="collapsed",
+    )
+    render_project_folder_status()
+    st.write("")
     with st.form("step1_form"):
         c1, c2 = st.columns(2)
         with c1:
@@ -1605,16 +2672,36 @@ if st.session_state.current_step == 1:
             if st.form_submit_button("下一步：识别自动分录映射", width="stretch"):
                 if entity_name and system_name:
                     st.session_state.audit_context = {"entity_name": entity_name, "system_name": system_name, "system_version": system_name, "period_start": str(period_start), "period_end": str(period_end)}
-                    go_to_step(2)
+                    if project_folder_files:
+                        with st.spinner("正在自动识别项目资料包并加载可用清单..."):
+                            summary = process_project_folder_upload(project_folder_files, selected_model)
+                        if st.session_state.base_files_ready:
+                            go_to_step(3)
+                        else:
+                            if summary.get("warnings"):
+                                st.warning("；".join(summary["warnings"][:6]))
+                            go_to_step(2)
+                    else:
+                        go_to_step(2)
                 else: st.error("❗ 请完整填写背景信息。")
 
 # --- STEP 2 ---
 elif st.session_state.current_step == 2:
     st.subheader("步骤 2: 识别 SAP 自动分录与财务科目映射")
     st.caption("上传 SAP 自动过账配置与科目主数据，系统将识别收入、成本、存货、应付和生产等业务场景影响的财务科目。余额表可在下一步补充。")
-    u1, u2 = st.columns(2)
-    with u1: t030_file = st.file_uploader("自动过账配置（T030）", type=["csv", "xlsx", "xls"])
-    with u2: skat_file = st.file_uploader("科目主数据（SKAT）", type=["csv", "xlsx", "xls"])
+    render_project_folder_status()
+    t030_file = None
+    skat_file = None
+    if st.session_state.project_folder_loaded and st.session_state.base_files_ready:
+        st.success("T030/SKAT 已从第一步项目资料包自动加载。需要替换时可展开下方区域重新上传。")
+        with st.expander("替换自动过账配置与科目主数据", expanded=False):
+            u1, u2 = st.columns(2)
+            with u1: t030_file = st.file_uploader("自动过账配置（T030）", type=["csv", "xlsx", "xls"])
+            with u2: skat_file = st.file_uploader("科目主数据（SKAT）", type=["csv", "xlsx", "xls"])
+    else:
+        u1, u2 = st.columns(2)
+        with u1: t030_file = st.file_uploader("自动过账配置（T030）", type=["csv", "xlsx", "xls"])
+        with u2: skat_file = st.file_uploader("科目主数据（SKAT）", type=["csv", "xlsx", "xls"])
 
     if t030_file and skat_file:
         base_signature = upload_signature(t030_file, skat_file)
@@ -1671,7 +2758,14 @@ elif st.session_state.current_step == 3:
         tb_label = "可选：S/4 编辑版科目余额/发生额表或 ACDOCA 归集核对表（用于补充金额分析）"
     else:
         tb_label = "可选：科目余额/发生额表（用于补充金额分析和部分科目名称）"
-    tb_files = st.file_uploader(tb_label, type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+    render_project_folder_status()
+    tb_files = []
+    if st.session_state.project_folder_loaded and st.session_state.trial_balance_ready:
+        st.success("余额/发生额表已从第一步项目资料包自动加载。需要补充或替换时可展开下方区域。")
+        with st.expander("补充或替换余额/发生额表", expanded=False):
+            tb_files = st.file_uploader(tb_label, type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+    else:
+        tb_files = st.file_uploader(tb_label, type=["csv", "xlsx", "xls"], accept_multiple_files=True)
     if tb_files:
         tb_signature = upload_signature(tb_files)
         if tb_signature != st.session_state.trial_balance_signature:
@@ -1736,6 +2830,24 @@ elif st.session_state.current_step == 3:
                     st.session_state.mm03_records = records
                     st.session_state.mm03_signature = mm03_signature
                     status.update(label=f"已解析 {len(records)} 张 MM03 截图", state="complete")
+        pending_mm03_sources = st.session_state.get("project_pending_mm03_sources") or []
+        if pending_mm03_sources:
+            if not st.session_state.get("project_auto_mm03_attempted", False):
+                st.session_state.project_auto_mm03_attempted = True
+                with st.status(f"正在解析 {len(pending_mm03_sources)} 张 MM03 截图...", expanded=False) as status:
+                    parsed_count, mm03_errors = process_pending_project_mm03_images()
+                    if mm03_errors:
+                        st.warning("；".join(mm03_errors[:5]))
+                    status.update(label=f"已解析 {parsed_count} 张 MM03 截图", state="complete")
+                pending_mm03_sources = st.session_state.get("project_pending_mm03_sources") or []
+            if pending_mm03_sources:
+                st.info(f"项目资料包中仍有 {len(pending_mm03_sources)} 张 MM03 截图待解析或待重试。")
+                if st.button("重新解析项目资料包 MM03 截图", key="parse_project_mm03_images"):
+                    with st.status(f"正在解析 {len(pending_mm03_sources)} 张 MM03 截图...", expanded=False) as status:
+                        parsed_count, mm03_errors = process_pending_project_mm03_images()
+                        if mm03_errors:
+                            st.warning("；".join(mm03_errors[:5]))
+                        status.update(label=f"已解析 {parsed_count} 张 MM03 截图", state="complete")
         if st.session_state.mm03_image_names:
             st.info(f"已记录 {len(st.session_state.mm03_image_names)} 张 MM03 截图，已解析 {len(st.session_state.mm03_records)} 张，将在抽样场景表中补充物料号、工厂编号与评估分类。")
         if st.session_state.mm03_records:
@@ -1772,9 +2884,49 @@ elif st.session_state.current_step == 3:
         st.warning("请先完成场景匹配，系统需要 10 个审计场景后才能录入样本。")
         st.stop()
     st.caption("如同时上传采购、销售等不同场景的样本，请在上传后按文件分别选择对应审计场景。")
-    s1, s2 = st.columns(2)
-    with s1: samples_files = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
-    with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    samples_files = []
+    voucher_images = []
+    pending_voucher_sources = st.session_state.get("project_pending_voucher_sources") or []
+    existing_project_samples = st.session_state.project_folder_loaded and (st.session_state.sample_table_records or st.session_state.ocr_samples or pending_voucher_sources)
+    if existing_project_samples:
+        st.success("样本清单/凭证截图已从第一步项目资料包自动加载。需要补充或替换时可展开下方区域。")
+        with st.expander("补充样本清单或凭证截图", expanded=False):
+            s1, s2 = st.columns(2)
+            with s1: samples_files = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+            with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    else:
+        s1, s2 = st.columns(2)
+        with s1: samples_files = st.file_uploader("方案 A: 样本清单", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+        with s2: voucher_images = st.file_uploader("方案 B: 凭证截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    if pending_voucher_sources:
+        if not st.session_state.get("project_auto_voucher_attempted", False) and not st.session_state.ocr_busy:
+            st.session_state.project_auto_voucher_attempted = True
+            st.session_state.ocr_busy = True
+            try:
+                with st.status(f"正在 OCR 解析 {len(pending_voucher_sources)} 张凭证截图...", expanded=False) as status:
+                    added, voucher_errors = process_pending_project_voucher_images(selected_model)
+                    if voucher_errors:
+                        st.warning("；".join(voucher_errors[:5]))
+                    status.update(label=f"已生成 {added} 行凭证样本", state="complete")
+            finally:
+                st.session_state.ocr_busy = False
+            pending_voucher_sources = st.session_state.get("project_pending_voucher_sources") or []
+        if pending_voucher_sources:
+            if st.session_state.sample_table_records or st.session_state.ocr_samples:
+                st.info(f"项目资料包中仍有 {len(pending_voucher_sources)} 张凭证截图待 OCR 或待重试；已加载的样本清单可直接生成底稿，截图仅作为补充证据。")
+            else:
+                st.info(f"项目资料包中仍有 {len(pending_voucher_sources)} 张凭证截图待 OCR 或待重试。")
+            if st.button("重新解析项目资料包凭证截图", key="parse_project_voucher_images", disabled=st.session_state.ocr_busy):
+                st.session_state.ocr_busy = True
+                try:
+                    with st.status(f"正在 OCR 解析 {len(pending_voucher_sources)} 张凭证截图...", expanded=False) as status:
+                        added, voucher_errors = process_pending_project_voucher_images(selected_model)
+                        if voucher_errors:
+                            st.warning("；".join(voucher_errors[:5]))
+                        status.update(label=f"已生成 {added} 行凭证样本", state="complete")
+                finally:
+                    st.session_state.ocr_busy = False
+                st.rerun()
     if samples_files:
         samples_signature = upload_signature(samples_files)
         if samples_signature != st.session_state.sample_table_signature:
@@ -1875,9 +3027,12 @@ elif st.session_state.current_step == 3:
     with nav_cols[1]:
         if st.button("返回上一步", width="stretch"): go_to_step(2)
     with nav_cols[2]:
-        # Only enable button if ocr is not busy AND we have either a file or OCR samples
         final_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
-        btn_disabled = st.session_state.ocr_busy or not final_sample_records
+        btn_disabled = not final_sample_records
+        if st.session_state.ocr_busy and final_sample_records:
+            st.caption("OCR 仍在处理补充截图；当前已有样本记录，可先生成底稿。")
+        elif not final_sample_records:
+            st.caption("请先上传样本清单，或解析凭证截图生成样本记录。")
         if st.button("🚀 生成最终底稿", width="stretch", disabled=btn_disabled):
             with st.spinner("AI 正在撰写穿行测试描述..."):
                 c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()

@@ -113,7 +113,7 @@ class GeneralAuditReportGenerator(ReportGenerator):
         )
 
         ws.merge_cells("A1:F1")
-        ws["A1"] = "SAP 自动分录审计 Executive Summary"
+        ws["A1"] = "TSDA 测试范围框定辅助驾驶舱 Executive Summary"
         ws["A1"].font = title_font
         ws["A1"].alignment = align_center
 
