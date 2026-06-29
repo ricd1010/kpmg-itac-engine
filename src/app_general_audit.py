@@ -44,7 +44,7 @@ fav_b64 = base64.b64encode(fav_svg.encode()).decode()
 
 st.set_page_config(
     page_title="TSDA 测试范围框定辅助驾驶舱",
-    page_icon=f"data:image/svg+xml;base64,{fav_b64}",
+    page_icon="🎯",
     layout="wide",
 )
 
