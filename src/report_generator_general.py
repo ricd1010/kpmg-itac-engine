@@ -49,7 +49,6 @@ class GeneralAuditReportGenerator(ReportGenerator):
                         "account": str(account.get("account", "") or ""),
                         "description": str(account.get("description", "未知科目") or "未知科目"),
                         "amount": total or debit + credit,
-                        "is_extra": bool(account.get("is_extra")),
                     })
         return rows
 
@@ -73,12 +72,11 @@ class GeneralAuditReportGenerator(ReportGenerator):
         ]
 
     @classmethod
-    def _extra_company_summary(cls, ranked_scenarios, limit=5):
-        counts = defaultdict(int)
+    def _company_concentration_summary(cls, ranked_scenarios, limit=5):
+        totals = defaultdict(float)
         for row in cls._account_rows(ranked_scenarios):
-            if row["is_extra"]:
-                counts[row["company"]] += 1
-        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+            totals[row["company"]] += cls._num(row["amount"])
+        return sorted(totals.items(), key=lambda item: (-abs(item[1]), item[0]))[:limit]
 
     @staticmethod
     def _sample_counts(di_results):
@@ -86,6 +84,40 @@ class GeneralAuditReportGenerator(ReportGenerator):
         for item in di_results or []:
             counts[str(item.get("scenario", "") or "")] += 1
         return counts
+
+    def _write_voucher_validation_sheet(self, wb, rows, styles):
+        if not rows:
+            return
+        ws = wb.create_sheet("凭证配置验证")
+        blue_fill = styles["blue_fill"]
+        header_font = styles["header_font"]
+        border = styles["border"]
+        align_wrap = styles["align_wrap"]
+        section_font = styles["section_font"]
+
+        headers = [
+            "凭证号", "审计场景", "公司代码", "物料号", "科目编码", "借贷方向",
+            "T001K评估分组", "MM03工厂", "MM03评估分类", "T030期望科目", "校验结论", "校验说明",
+        ]
+        ws["A1"] = "凭证到 T030 配置验证"
+        ws["A1"].font = section_font
+        for col, header in enumerate(headers, start=1):
+            cell = ws.cell(row=3, column=col, value=header)
+            cell.fill = blue_fill
+            cell.font = header_font
+            cell.alignment = align_wrap
+            cell.border = border
+        for row_idx, row in enumerate(rows, start=4):
+            for col, header in enumerate(headers, start=1):
+                cell = ws.cell(row=row_idx, column=col, value=row.get(header, ""))
+                cell.alignment = align_wrap
+                cell.border = border
+        widths = {
+            "A": 18, "B": 16, "C": 12, "D": 18, "E": 16, "F": 12,
+            "G": 16, "H": 12, "I": 14, "J": 28, "K": 12, "L": 46,
+        }
+        for col, width in widths.items():
+            ws.column_dimensions[col].width = width
 
     def generate(self, ranked_scenarios, di_results, audit_context=None):
         path = super().generate(ranked_scenarios, di_results, audit_context)
@@ -144,7 +176,7 @@ class GeneralAuditReportGenerator(ReportGenerator):
         )
         account_rows = self._account_rows(ranked_scenarios)
         top_accounts = self._top_accounts(ranked_scenarios)
-        extra_companies = self._extra_company_summary(ranked_scenarios)
+        concentrated_companies = self._company_concentration_summary(ranked_scenarios)
         sample_counts = self._sample_counts(di_results)
         covered_scenarios = sum(1 for count in sample_counts.values() if count)
 
@@ -153,7 +185,7 @@ class GeneralAuditReportGenerator(ReportGenerator):
             ("样本覆盖场景", covered_scenarios),
             ("归集金额", f"{sum(item['amount'] for item in scenario_totals):,.2f}"),
             ("命中科目记录", len(account_rows)),
-            ("额外科目记录", sum(1 for row in account_rows if row["is_extra"])),
+            ("重点公司数", len(concentrated_companies)),
         ]
         ws["A6"] = "关键审计指标"
         ws["A6"].font = section_font
@@ -177,7 +209,10 @@ class GeneralAuditReportGenerator(ReportGenerator):
             f"{top_accounts[0]['scenario']} - {top_accounts[0]['account']} {top_accounts[0]['description']}（{top_accounts[0]['amount']:,.2f}）"
             if top_accounts else "暂无科目金额数据"
         )
-        extra_company_text = "、".join(f"{company}（{count} 条）" for company, count in extra_companies) or "未识别到额外科目"
+        concentrated_company_text = "、".join(
+            f"{company}（{amount:,.2f}）"
+            for company, amount in concentrated_companies[:3]
+        ) or "暂无公司维度金额数据"
         sample_focus_text = "；".join(
             f"{row['scenario']} - {row['account']} {row['description']}"
             for row in top_accounts[:3]
@@ -188,7 +223,7 @@ class GeneralAuditReportGenerator(ReportGenerator):
         summary_lines = [
             f"1. SAP 自动分录金额影响最大的业务场景：{top_scenario_text}。",
             f"2. 金额贡献最高的财务科目：{top_account_text}。",
-            f"3. 需要关注配置差异或特殊业务模式的公司：{extra_company_text}。",
+            f"3. 自动分录金额较集中的公司：{concentrated_company_text}，建议结合样本覆盖情况安排穿行测试。",
             f"4. 建议优先抽样覆盖对象：{sample_focus_text}。",
             "5. 本底稿将自动过账配置、科目主数据、余额/发生额和样本凭证串联，用于支持审计团队理解自动分录如何影响财务报表科目。",
         ]
@@ -243,6 +278,18 @@ class GeneralAuditReportGenerator(ReportGenerator):
         for row in range(1, 45):
             ws.row_dimensions[row].height = 22
         ws.row_dimensions[12].height = 120
+
+        self._write_voucher_validation_sheet(
+            wb,
+            audit_context.get("voucher_validation") or [],
+            {
+                "blue_fill": blue_fill,
+                "header_font": header_font,
+                "border": border,
+                "align_wrap": align_wrap,
+                "section_font": section_font,
+            },
+        )
 
         wb.save(path)
         return path

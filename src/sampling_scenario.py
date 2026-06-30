@@ -178,7 +178,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
     for scenario in _as_list(ranked_scenarios):
         scenario = _as_dict(scenario)
         scenario_name = str(scenario.get("name", "")).strip()
-        baseline_company = str(scenario.get("baseline_company_code") or "").strip()
         company_values = _as_list(scenario.get("company_values"))
         account_share_map = _scenario_account_share_map(scenario)
 
@@ -197,8 +196,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                         "公司代码": company_code,
                         "T001K评估分组代码": valuation_group,
                         "审计场景": scenario_name,
-                        "基准公司": baseline_company,
-                        "是否额外科目": "",
                         "科目编码": "",
                         "科目描述": "该公司最后期间未命中此场景科目",
                         "科目金额": 0.0,
@@ -210,20 +207,17 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
 
                 for account in account_values:
                     account = _as_dict(account)
-                    is_extra = bool(account.get("is_extra"))
                     account_code = _clean_code(account.get("account"))
                     rows.append({
                         "公司代码": company_code,
                         "T001K评估分组代码": valuation_group,
                         "审计场景": scenario_name,
-                        "基准公司": baseline_company,
-                        "是否额外科目": "是" if is_extra else "否",
                         "科目编码": account_code,
                         "科目描述": str(account.get("description") or ""),
                         "科目金额": _as_float(account.get("total_value")),
                         "占比": _format_pct(account_share_map.get(account_code, 0.0)),
                         "场景金额": scenario_amount,
-                        "抽样建议": "优先抽样：相比基准公司多出的实际命中科目" if is_extra else "按场景金额和样本覆盖情况抽样",
+                        "抽样建议": "按场景金额、科目占比和样本覆盖情况抽样",
                     } | mm03_fields)
             continue
 
@@ -233,8 +227,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "公司代码": "",
                 "T001K评估分组代码": "",
                 "审计场景": scenario_name,
-                "基准公司": "",
-                "是否额外科目": "",
                 "科目编码": "",
                 "科目描述": "未识别到关联科目",
                 "科目金额": 0.0,
@@ -251,8 +243,6 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "公司代码": "",
                 "T001K评估分组代码": "",
                 "审计场景": scenario_name,
-                "基准公司": "",
-                "是否额外科目": "",
                 "科目编码": account_code,
                 "科目描述": description,
                 "科目金额": 0.0,

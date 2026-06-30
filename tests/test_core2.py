@@ -190,7 +190,7 @@ def test_core2_balances_multi_line_sap_voucher_with_trailing_credit_minus(tmp_pa
 def test_normalize_samples_dataframe_removes_blank_docs_and_infers_direction():
     df = pd.DataFrame([
         {"DOC_NUM": "  ", "SAKNR": "1403000000", "AMOUNT": "1", "SHKZG": ""},
-        {"DOC_NUM": "A", "SAKNR": "0001403000000", "MATNR": "MAT-009", "AMOUNT": "(9)", "SHKZG": None},
+        {"DOC_NUM": "A", "COMPANY_CODE": "4000", "SAKNR": "0001403000000", "MATNR": "MAT-009", "AMOUNT": "(9)", "SHKZG": None, "KTOSL": "WRX"},
     ])
 
     normalized = Core2Orchestrator.normalize_samples_dataframe(df)
@@ -198,8 +198,10 @@ def test_normalize_samples_dataframe_removes_blank_docs_and_infers_direction():
     assert len(normalized) == 1
     row = normalized.iloc[0]
     assert row["DOC_NUM"] == "A"
+    assert row["COMPANY_CODE"] == "4000"
     assert row["SAKNR_CLEAN"] == "1403000000"
     assert row["MATNR"] == "MAT-009"
+    assert row["KTOSL"] == "WRX"
     assert row["SHKZG"] == "H"
     assert row["AMT_VAL"] == 9.0
 

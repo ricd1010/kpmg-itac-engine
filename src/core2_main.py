@@ -6,7 +6,7 @@ from llm_client import LLMClient
 class Core2Orchestrator:
     COUNTERPARTY_PLACEHOLDER = "OCR未识别对方科目"
     AUTO_SCENARIO_LABELS = {"", "auto", "自动识别", "自動識別", "automatic"}
-    SAMPLE_BASE_COLUMNS = ["DOC_NUM", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE", "SCENARIO"]
+    SAMPLE_BASE_COLUMNS = ["DOC_NUM", "COMPANY_CODE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE", "SCENARIO", "KTOSL", "KOMOK"]
     SAMPLE_OUTPUT_COLUMNS = SAMPLE_BASE_COLUMNS + ["AMT_SIGNED", "AMT_VAL", "SAKNR_CLEAN"]
 
     def __init__(self, data_dir):
@@ -101,6 +101,7 @@ class Core2Orchestrator:
         signed_amount = cls._parse_signed_amount(record.get("AMOUNT"))
         amount_text = cls._clean_text(record.get("AMOUNT"))
         doc_num = cls._clean_text(record.get("DOC_NUM"))
+        company_code = cls._clean_text(record.get("COMPANY_CODE"))
         saknr = cls._clean_text(record.get("SAKNR"))
         txt50 = cls._clean_text(record.get("TXT50")) or "未定义科目"
         matnr = cls._clean_text(record.get("MATNR"))
@@ -108,6 +109,7 @@ class Core2Orchestrator:
         scenario = cls._normalize_scenario(record.get("SCENARIO"))
         return {
             "DOC_NUM": doc_num,
+            "COMPANY_CODE": company_code,
             "SAKNR": saknr,
             "TXT50": txt50,
             "MATNR": matnr,
@@ -115,6 +117,8 @@ class Core2Orchestrator:
             "SHKZG": cls._normalize_direction(record.get("SHKZG"), signed_amount),
             "DATE": date,
             "SCENARIO": scenario,
+            "KTOSL": cls._clean_text(record.get("KTOSL")),
+            "KOMOK": cls._clean_text(record.get("KOMOK")),
         }
 
     @classmethod
@@ -228,13 +232,16 @@ class Core2Orchestrator:
                         synthesized.append({
                             "DOC_NUM": doc_num,
                             "DATE": d_row.get('DATE', '2026-06-01'),
+                            "COMPANY_CODE": d_row.get('COMPANY_CODE', c_row.get('COMPANY_CODE', '')),
                             "DEBIT_ACC": d_row['SAKNR'],
                             "DEBIT_DESC": d_row.get('TXT50', '未定义科目'),
                             "DEBIT_MATNR": d_row.get('MATNR', ''),
                             "CREDIT_ACC": c_row['SAKNR'],
                             "CREDIT_DESC": c_row.get('TXT50', '未定义科目'),
                             "CREDIT_MATNR": c_row.get('MATNR', ''),
-                            "AMOUNT": amt
+                            "AMOUNT": amt,
+                            "KTOSL": d_row.get('KTOSL', c_row.get('KTOSL', '')),
+                            "KOMOK": d_row.get('KOMOK', c_row.get('KOMOK', '')),
                         })
             if not synthesized:
                 balanced_sample = self._synthesize_balanced_document_sample(doc_num, debit_rows, credit_rows, target_account_codes)
@@ -279,6 +286,7 @@ class Core2Orchestrator:
         return {
             "DOC_NUM": doc_num,
             "DATE": debit_rows.iloc[0].get("DATE", credit_rows.iloc[0].get("DATE", "2026-06-01")),
+            "COMPANY_CODE": debit_rows.iloc[0].get("COMPANY_CODE", credit_rows.iloc[0].get("COMPANY_CODE", "")),
             "DEBIT_ACC": self._format_lines(debit_lines, "account"),
             "DEBIT_DESC": self._format_lines(debit_lines, "description"),
             "DEBIT_MATNR": self._format_lines(debit_lines, "matnr"),
@@ -286,6 +294,8 @@ class Core2Orchestrator:
             "CREDIT_DESC": self._format_lines(credit_lines, "description"),
             "CREDIT_MATNR": self._format_lines(credit_lines, "matnr"),
             "AMOUNT": round(debit_total, 2),
+            "KTOSL": debit_rows.iloc[0].get("KTOSL", credit_rows.iloc[0].get("KTOSL", "")),
+            "KOMOK": debit_rows.iloc[0].get("KOMOK", credit_rows.iloc[0].get("KOMOK", "")),
             "DEBIT_LINES": debit_lines,
             "CREDIT_LINES": credit_lines,
             "BALANCED_MATCH": True,
@@ -322,6 +332,7 @@ class Core2Orchestrator:
             synthesized.append({
                 "DOC_NUM": doc_num,
                 "DATE": row.get("DATE", "2026-06-01"),
+                "COMPANY_CODE": row.get("COMPANY_CODE", ""),
                 "DEBIT_ACC": debit_acc,
                 "DEBIT_DESC": debit_desc,
                 "DEBIT_MATNR": debit_matnr,
@@ -329,6 +340,8 @@ class Core2Orchestrator:
                 "CREDIT_DESC": credit_desc,
                 "CREDIT_MATNR": credit_matnr,
                 "AMOUNT": amount,
+                "KTOSL": row.get("KTOSL", ""),
+                "KOMOK": row.get("KOMOK", ""),
                 "OCR_FALLBACK": True,
                 "OCR_NOTE": "OCR未识别完整借贷配对，已基于命中场景科目的单边记录生成描述。"
             })

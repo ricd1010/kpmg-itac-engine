@@ -33,7 +33,7 @@ def test_core1_scenario_identification():
     orchestrator = Core1Orchestrator(data_dir)
     results = orchestrator.run()
     
-    assert len(results) == 10
+    assert len(results) == 11
     scenario_names = [res['name'] for res in results]
     assert "销售发货" in scenario_names
     
@@ -53,12 +53,11 @@ def test_core1_preview_runs_without_trial_balance(tmp_path):
 
     results = Core1Orchestrator(tmp_path).run()
 
-    assert len(results) == 10
+    assert len(results) == 11
     assert all(result["total_value"] == 0 for result in results)
     assert any(result["accounts"] for result in results)
-    assert all(result["baseline_company_code"] is None for result in results)
-    assert all(result["baseline_account_codes"] == [] for result in results)
-    assert all(result["extra_account_count"] == 0 for result in results)
+    assert all("baseline_company_code" not in result for result in results)
+    assert all("extra_account_count" not in result for result in results)
 
 
 def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
@@ -98,9 +97,6 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
     assert purchase_receipt["debit_value"] == 12.0
     assert purchase_receipt["credit_value"] == 1200.0
     assert purchase_receipt["combined_value"] == 1212.0
-    assert purchase_receipt["baseline_company_code"] == "4010"
-    assert purchase_receipt["baseline_account_codes"] == ["2202040000"]
-    assert purchase_receipt["extra_account_count"] == 0
     assert purchase_receipt["company_values"] == [
         {
             "company_code": "4000",
@@ -116,8 +112,6 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
                     "debit_value": 7.0,
                     "credit_value": 700.0,
                     "combined_value": 707.0,
-                    "is_extra": False,
-                    "baseline_company_code": "4010",
                 },
             ],
         },
@@ -135,8 +129,6 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
                     "debit_value": 5.0,
                     "credit_value": 500.0,
                     "combined_value": 505.0,
-                    "is_extra": False,
-                    "baseline_company_code": "4010",
                 },
             ],
         },
@@ -144,12 +136,9 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
     assert sales_entry["raw_accounts"] == []
     assert sales_entry["total_value"] == 0
     assert sales_entry["company_values"] == []
-    assert sales_entry["baseline_company_code"] is None
-    assert sales_entry["baseline_account_codes"] == []
-    assert sales_entry["extra_account_count"] == 0
 
 
-def test_core1_baseline_tie_breaks_by_amount_then_company_code(tmp_path):
+def test_core1_no_longer_marks_baseline_extra_accounts(tmp_path):
     (tmp_path / "T030.csv").write_text(
         "\n".join([
             "KTOSL,KOMOK,KONTS,KONTH",
@@ -182,18 +171,21 @@ def test_core1_baseline_tie_breaks_by_amount_then_company_code(tmp_path):
     results = Core1Orchestrator(tmp_path).run()
     purchase_receipt = next(result for result in results if result["name"] == "采购收货")
     company_4030 = next(item for item in purchase_receipt["company_values"] if item["company_code"] == "4030")
-    extra_4030 = [account for account in company_4030["account_values"] if account["is_extra"]]
 
-    assert purchase_receipt["baseline_company_code"] == "4010"
-    assert purchase_receipt["baseline_account_codes"] == ["2202040000"]
-    assert purchase_receipt["extra_account_count"] == 1
-    assert extra_4030 == [{
-        "account": "2221010101",
-        "description": "进项税额",
-        "total_value": 1.0,
-        "is_extra": True,
-        "baseline_company_code": "4010",
-    }]
+    assert "baseline_company_code" not in purchase_receipt
+    assert "extra_account_count" not in purchase_receipt
+    assert company_4030["account_values"] == [
+        {
+            "account": "2202040000",
+            "description": "应付账款-GR/IR",
+            "total_value": 10.0,
+        },
+        {
+            "account": "2221010101",
+            "description": "进项税额",
+            "total_value": 1.0,
+        },
+    ]
 
 
 def test_core1_uses_specific_amount_accounts_to_avoid_shared_bsx_duplication(tmp_path):
@@ -238,8 +230,6 @@ def test_core1_uses_specific_amount_accounts_to_avoid_shared_bsx_duplication(tmp
         "account": "2202040000",
         "description": "应付账款-GR/IR",
         "total_value": 100.0,
-        "is_extra": False,
-        "baseline_company_code": "4390",
     }]
 
     assert set(production_issue["raw_accounts"]) == {"1403000000", "1405010000", "5001010100"}
@@ -249,8 +239,6 @@ def test_core1_uses_specific_amount_accounts_to_avoid_shared_bsx_duplication(tmp
         "account": "5001010100",
         "description": "生产成本-原材料",
         "total_value": 200.0,
-        "is_extra": False,
-        "baseline_company_code": "4390",
     }]
 
 
@@ -297,15 +285,11 @@ def test_core1_filters_completion_amount_accounts_to_completion_transfer_account
             "account": "5001080000",
             "description": "生产成本-半成品完工转出",
             "total_value": 60.0,
-            "is_extra": False,
-            "baseline_company_code": "4390",
         },
         {
             "account": "5001090000",
             "description": "生产成本-产成品完工转出",
             "total_value": 40.0,
-            "is_extra": False,
-            "baseline_company_code": "4390",
         },
     ]
 
@@ -348,8 +332,6 @@ def test_core1_keeps_prd_pra_only_in_finished_goods_variance_amounts(tmp_path):
         "account": "1403010400",
         "description": "原材料-差异-差异",
         "total_value": 200.0,
-        "is_extra": False,
-        "baseline_company_code": "4390",
     }]
 
     assert finished_goods_variance["amount_accounts"] == ["1403010200"]
@@ -358,8 +340,6 @@ def test_core1_keeps_prd_pra_only_in_finished_goods_variance_amounts(tmp_path):
         "account": "1403010200",
         "description": "原材料-差异-物料转物料差异",
         "total_value": 100.0,
-        "is_extra": False,
-        "baseline_company_code": "4390",
     }]
 
 
@@ -403,6 +383,54 @@ def test_core1_outputs_account_details_with_direction_and_valuation_fields(tmp_p
     assert detail_by_account["1403000000"]["bklas"] == "7900"
     assert detail_by_account["2202040000"]["direction"] == "贷方"
     assert detail_by_account["2202040000"]["ktosl"] == "WRX"
+
+
+def test_core1_enriches_fixed_asset_depreciation_scene_from_account_descriptions(tmp_path):
+    (tmp_path / "T030.csv").write_text(
+        "KTOSL,KOMOK,KONTS,KONTH\n",
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "SKAT.csv").write_text(
+        "\n".join([
+            "SAKNR,TXT50",
+            "6601070000,折旧费",
+            "1602000000,累计折旧",
+        ]),
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "TrialBalance.csv").write_text(
+        "\n".join([
+            "COMPANY_CODE,PERIOD,SAKNR,TXT50,DMBTR_DEBIT,DMBTR_CREDIT",
+            "4000,202512,6601070000,折旧费,123,0",
+            "4000,202512,1602000000,累计折旧,0,-123",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    results = Core1Orchestrator(tmp_path).run()
+    depreciation = next(result for result in results if result["name"] == "固定资产折旧")
+
+    assert set(depreciation["raw_accounts"]) == {"1602000000", "6601070000"}
+    assert depreciation["total_value"] == 123.0
+    assert depreciation["credit_value"] == 123.0
+    assert depreciation["company_values"][0]["account_values"] == [
+        {
+            "account": "1602000000",
+            "description": "累计折旧",
+            "total_value": 0.0,
+            "debit_value": 0.0,
+            "credit_value": 123.0,
+            "combined_value": 123.0,
+        },
+        {
+            "account": "6601070000",
+            "description": "折旧费",
+            "total_value": 123.0,
+            "debit_value": 123.0,
+            "credit_value": 0.0,
+            "combined_value": 123.0,
+        },
+    ]
 
 if __name__ == "__main__":
     import pytest

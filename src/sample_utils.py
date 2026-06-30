@@ -6,12 +6,15 @@ SAMPLE_PREVIEW_COLUMNS = [
     "SOURCE_FILE",
     "SCENARIO",
     "DOC_NUM",
+    "COMPANY_CODE",
     "DATE",
     "SAKNR",
     "TXT50",
     "MATNR",
     "AMOUNT",
     "SHKZG",
+    "KTOSL",
+    "KOMOK",
 ]
 
 

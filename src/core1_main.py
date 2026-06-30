@@ -20,7 +20,8 @@ class Core1Orchestrator:
             "生产领料": [("GBB", "VBO"), ("GBB", "VBR"), ("BSX", "")],
             "完工入库": [("GBB", "AUF"), ("BSX", "")],
             "工单差异": [("PRD", ""), ("GBB", "AUF")],
-            "产成品差异": [("UMSK", ""), ("PRD", "PRA")]
+            "产成品差异": [("UMSK", ""), ("PRD", "PRA")],
+            "固定资产折旧": []
         }
         # 金额归集使用更特异的自动记账规则，避免 BSX 等共享库存科目在多个场景重复计入。
         self.amount_mappings = {
@@ -33,7 +34,8 @@ class Core1Orchestrator:
             "生产领料": [("GBB", "VBO"), ("GBB", "VBR")],
             "完工入库": [("GBB", "AUF")],
             "工单差异": [("PRD", "")],
-            "产成品差异": [("UMSK", ""), ("PRD", "PRA")]
+            "产成品差异": [("UMSK", ""), ("PRD", "PRA")],
+            "固定资产折旧": []
         }
         self.amount_account_include_prefixes = {
             # GBB-AUF 中可能混入物料消耗等费用科目，完工入库金额只取完工转出科目。
@@ -157,37 +159,42 @@ class Core1Orchestrator:
             })
         return details
 
-    def _apply_baseline_flags(self, company_values):
-        candidates = [item for item in company_values if item.get("account_values")]
-        if not candidates:
-            return None, [], 0
+    def _is_fixed_asset_depreciation_account(self, account_code, description):
+        text = str(description or "")
+        code = str(account_code or "")
+        if not code:
+            return False
+        if any(keyword in text for keyword in ("折旧", "累计折旧")):
+            return True
+        return code.startswith(("1602", "660107", "660134"))
 
-        baseline = min(
-            candidates,
-            key=lambda item: (
-                len(item.get("account_values", [])),
-                float(item.get("total_value", 0) or 0),
-                str(item.get("company_code", ""))
+    def _enrich_fixed_asset_depreciation_scene(self, scenario_accounts, scenario_amount_accounts, scenario_account_details, acc_descs):
+        scenario_name = "固定资产折旧"
+        if scenario_name not in scenario_accounts:
+            return
+        for account_code, description in acc_descs.items():
+            if not self._is_fixed_asset_depreciation_account(account_code, description):
+                continue
+            scenario_accounts[scenario_name].add(account_code)
+            scenario_amount_accounts[scenario_name].add(account_code)
+            self._merge_account_detail(
+                scenario_account_details[scenario_name],
+                account_code,
+                "借方",
+                "FA_DEP",
+                "",
+                "",
+                "",
             )
-        )
-        baseline_company_code = str(baseline.get("company_code", ""))
-        baseline_accounts = {
-            str(account.get("account", ""))
-            for account in baseline.get("account_values", [])
-            if account.get("account")
-        }
-        extra_accounts = set()
-
-        for item in company_values:
-            for account in item.get("account_values", []):
-                account_code = str(account.get("account", ""))
-                is_extra = bool(account_code and account_code not in baseline_accounts)
-                account["is_extra"] = is_extra
-                account["baseline_company_code"] = baseline_company_code
-                if is_extra:
-                    extra_accounts.add(account_code)
-
-        return baseline_company_code, sorted(baseline_accounts), len(extra_accounts)
+            self._merge_account_detail(
+                scenario_account_details[scenario_name],
+                account_code,
+                "贷方",
+                "FA_DEP",
+                "",
+                "",
+                "",
+            )
 
     def run(self):
         # 1. 解析 T030，提取已配置的科目
@@ -313,6 +320,13 @@ class Core1Orchestrator:
             except Exception as e:
                 print(f"Core 1 - Trial Balance 汇总失败: {e}")
 
+        self._enrich_fixed_asset_depreciation_scene(
+            scenario_accounts,
+            scenario_amount_accounts,
+            scenario_account_details,
+            acc_descs,
+        )
+
         # 4. 保留全部预设场景；未命中的场景显示为空科目、金额为 0
         results = []
         for name, acc_set in scenario_accounts.items():
@@ -358,7 +372,6 @@ class Core1Orchestrator:
                         })
                     company_values.append(company_entry)
             company_values.sort(key=lambda x: x["total_value"], reverse=True)
-            baseline_company_code, baseline_account_codes, extra_account_count = self._apply_baseline_flags(company_values)
 
             results.append({
                 "name": name,
@@ -371,9 +384,6 @@ class Core1Orchestrator:
                 "credit_value": sum(tb_credit_amounts.get(acc, 0) for acc in amount_acc_list),
                 "combined_value": sum(tb_combined_amounts.get(acc, 0) for acc in amount_acc_list),
                 "company_values": company_values,
-                "baseline_company_code": baseline_company_code,
-                "baseline_account_codes": baseline_account_codes,
-                "extra_account_count": extra_account_count
             })
 
         results.sort(key=lambda x: x['total_value'], reverse=True)

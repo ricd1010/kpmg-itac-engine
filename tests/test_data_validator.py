@@ -260,3 +260,39 @@ def test_t001k_maps_company_and_valuation_group(tmp_path):
     assert {"BUKRS", "BWMOD"}.issubset(df.columns)
     assert df.iloc[0]["BUKRS"] == "4000"
     assert df.iloc[0]["BWMOD"] == "4110"
+
+
+def test_data_validator_maps_german_headers_for_samples_t030_and_t001k(tmp_path):
+    sample_path = tmp_path / "samples_de.csv"
+    sample_path.write_text(
+        "Buchungskreis,Belegnummer,Sachkonto,Materialnummer,Betrag,Soll/Haben\n"
+        "4000,900001,1403000000,MAT-1,10,S\n",
+        encoding="utf-8-sig",
+    )
+    ok, msg, df = DataValidator.validate_file(MockUpload(sample_path), "Samples")
+    assert ok, msg
+    assert {"COMPANY_CODE", "DOC_NUM", "SAKNR", "MATNR", "AMOUNT", "SHKZG"}.issubset(df.columns)
+    assert df.iloc[0]["COMPANY_CODE"] == "4000"
+    assert df.iloc[0]["MATNR"] == "MAT-1"
+
+    t030_path = tmp_path / "t030_de.csv"
+    t030_path.write_text(
+        "Vorgang,Kontomodifikation,Bewertungsmodifikation,Bewertungsklasse,Sollkonto,Habenkonto\n"
+        "WRX,,4110,3000,1403000000,2202030100\n",
+        encoding="utf-8-sig",
+    )
+    ok, msg, df = DataValidator.validate_file(MockUpload(t030_path), "T030")
+    assert ok, msg
+    assert {"KTOSL", "KOMOK", "BWMOD", "BKLAS", "KONTS", "KONTH"}.issubset(df.columns)
+    assert df.iloc[0]["KTOSL"] == "WRX"
+    assert df.iloc[0]["BWMOD"] == "4110"
+
+    t001k_path = tmp_path / "t001k_de.csv"
+    t001k_path.write_text(
+        "Buchungskreis,Bewertungsmodifikation\n4000,4110\n",
+        encoding="utf-8-sig",
+    )
+    ok, msg, df = DataValidator.validate_file(MockUpload(t001k_path), "T001K")
+    assert ok, msg
+    assert df.iloc[0]["BUKRS"] == "4000"
+    assert df.iloc[0]["BWMOD"] == "4110"

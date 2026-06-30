@@ -19,6 +19,7 @@ from scenario_summary import amount_for_direction, build_scenario_account_totals
 from sampling_scenario import build_sampling_scenario_table
 from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
 from mm03_parser import mm03_records_to_dataframe_rows, parse_mm03_ocr_text
+from voucher_validation import validate_voucher_t030_logic
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -29,7 +30,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 14
+SCENARIO_PREVIEW_SCHEMA_VERSION = 15
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -275,6 +276,7 @@ if "audit_coverage_target_pct" not in st.session_state: st.session_state.audit_c
 if "audit_coverage_auto_seed_signature" not in st.session_state: st.session_state.audit_coverage_auto_seed_signature = None
 if "project_auto_mm03_attempted" not in st.session_state: st.session_state.project_auto_mm03_attempted = False
 if "project_auto_voucher_attempted" not in st.session_state: st.session_state.project_auto_voucher_attempted = False
+if "voucher_validation_records" not in st.session_state: st.session_state.voucher_validation_records = []
 
 def current_system_version():
     return st.session_state.audit_context.get("system_version") or st.session_state.audit_context.get("system_name") or "SAP S/4 HANA"
@@ -639,6 +641,7 @@ def clear_project_imported_data():
     st.session_state.sample_source_scenarios = {}
     st.session_state.audit_coverage_selected_keys = set()
     st.session_state.audit_coverage_auto_seed_signature = None
+    st.session_state.voucher_validation_records = []
     st.session_state.results = None
     st.session_state.scenario_preview = []
     st.session_state.scenario_preview_schema_version = None
@@ -1047,12 +1050,15 @@ def normalize_sample_preview_records(records, source_type="", source_file=""):
         item = {str(k).strip().upper(): v for k, v in dict(record).items()}
         item["SCENARIO"] = str(item.get("SCENARIO", "") or "").strip()
         item["DOC_NUM"] = item.get("DOC_NUM", "")
+        item["COMPANY_CODE"] = item.get("COMPANY_CODE", "")
         item["DATE"] = item.get("DATE", "")
         item["SAKNR"] = item.get("SAKNR", "")
         item["TXT50"] = item.get("TXT50", "")
         item["MATNR"] = item.get("MATNR", "")
         item["AMOUNT"] = item.get("AMOUNT", "")
         item["SHKZG"] = item.get("SHKZG", "")
+        item["KTOSL"] = item.get("KTOSL", "")
+        item["KOMOK"] = item.get("KOMOK", "")
         item["SOURCE_TYPE"] = item.get("SOURCE_TYPE", source_type)
         item["SOURCE_FILE"] = item.get("SOURCE_FILE", source_file)
         normalized.append(item)
@@ -1214,6 +1220,7 @@ SCENARIO_PROCESS_GROUPS = {
     "完工入库": "存货与生产成本",
     "工单差异": "存货与生产成本",
     "产成品差异": "存货与生产成本",
+    "固定资产折旧": "固定资产与折旧",
 }
 
 def process_group_for_scenario(scenario_name):
@@ -1311,6 +1318,11 @@ def subscenario_labels_for_detail(scenario_name, account_code="", description=""
             add("物料转物料差异")
         if "PRA" in komok_values:
             add("产成品采购差异")
+    elif scenario_name == "固定资产折旧":
+        if "累计折旧" in description or account_code.startswith("1602"):
+            add("累计折旧")
+        else:
+            add("折旧费用")
 
     if not labels and detail:
         ktosl_text = " / ".join(split_meta_values(detail.get("ktosl")))
@@ -1365,9 +1377,61 @@ def build_scenario_coverage_items(ranked, direction_filter="全部"):
             "占整体": (amount / overall_total * 100) if overall_total else 0.0,
             "占场景": float(row.get("amount_share_pct", 0) or 0),
             "命中公司数": int(row.get("company_count", 0) or 0),
-            "是否额外科目": "是" if int(row.get("extra_company_count", 0) or 0) else "否",
         })
     return pd.DataFrame(rows)
+
+def build_account_quantity_coverage(ranked, trial_balance_df):
+    if trial_balance_df is None or not hasattr(trial_balance_df, "empty") or trial_balance_df.empty:
+        return None
+    df = trial_balance_df.copy()
+    df.columns = [str(col).strip().upper() for col in df.columns]
+    if "SAKNR" not in df.columns:
+        return None
+    account_series = (
+        df["SAKNR"].astype(str)
+        .str.strip()
+        .str.replace(r"\.0$", "", regex=True)
+    )
+    all_accounts = {
+        account.lstrip("0") if account != "0" else "0"
+        for account in account_series
+        if account and account.lower() not in {"nan", "none", "null"}
+    }
+    scenario_accounts = {
+        str(account).strip().lstrip("0") if str(account).strip() != "0" else "0"
+        for scenario in ranked or []
+        for account in (scenario.get("amount_accounts") or scenario.get("raw_accounts") or [])
+        if str(account).strip()
+    }
+    matched_accounts = all_accounts.intersection(scenario_accounts)
+    unmatched_accounts = all_accounts.difference(scenario_accounts)
+    return {
+        "total_accounts": len(all_accounts),
+        "matched_accounts": len(matched_accounts),
+        "unmatched_accounts": len(unmatched_accounts),
+        "coverage_pct": (len(matched_accounts) / len(all_accounts) * 100) if all_accounts else 0.0,
+        "matched_account_codes": sorted(matched_accounts),
+        "unmatched_account_codes": sorted(unmatched_accounts),
+    }
+
+def render_account_quantity_coverage(ranked):
+    tb_df = load_session_table("TrialBalance")
+    coverage = build_account_quantity_coverage(ranked, tb_df)
+    if not coverage:
+        return
+
+    st.markdown("### 自动科目识别看板")
+    st.caption("以科目余额/发生额表中的唯一科目为基数，统计有多少科目已经落入当前自动分录场景范围。目标用于辅助判断自动凭证测试覆盖面，不替代审计判断。")
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("科余表科目数", f"{coverage['total_accounts']}")
+    metric_cols[1].metric("命中规定场景科目", f"{coverage['matched_accounts']}")
+    metric_cols[2].metric("数量占比", f"{coverage['coverage_pct']:.2f}%")
+    metric_cols[3].metric("未命中科目", f"{coverage['unmatched_accounts']}")
+
+    if coverage["coverage_pct"] >= 90:
+        st.success("已识别出 90% 以上客户科目与当前自动分录场景的关系，可进入样本覆盖范围筛选。")
+    else:
+        st.warning("当前科目数量覆盖率低于 90%。可补充固定资产、税费、人工、费用分摊等场景规则，或检查客户科目描述和配置表完整性。")
 
 def build_subscenario_rank_rows(coverage_df):
     if coverage_df.empty:
@@ -1512,7 +1576,7 @@ def render_testing_coverage_dashboard(ranked):
         unsafe_allow_html=True,
     )
     st.markdown("### 审计测试覆盖 Dashboard")
-    st.caption("按 10 个测试场景和子场景颗粒度选择拟测试范围，实时查看已选项目覆盖整体金额的比例。流程分类仅用于阅读，不作为聚合口径。")
+    st.caption("按已识别测试场景和子场景颗粒度选择拟测试范围，实时查看已选项目覆盖整体金额的比例。流程分类仅用于阅读，不作为聚合口径。")
 
     scenario_rank = (
         coverage_df.groupby("审计场景", as_index=False)["金额"]
@@ -1594,7 +1658,7 @@ def render_testing_coverage_dashboard(ranked):
     editor_df["占场景"] = editor_df["占场景"].round(2)
     editor_cols = [
         "纳入测试范围", "覆盖项ID", "流程分类", "审计场景", "子场景标签",
-        "科目编码", "科目描述", "金额", "占整体", "占场景", "命中公司数", "是否额外科目",
+        "科目编码", "科目描述", "金额", "占整体", "占场景", "命中公司数",
     ]
     edited_df = st.data_editor(
         editor_df[editor_cols],
@@ -1694,7 +1758,7 @@ def render_testing_coverage_dashboard(ranked):
             st.caption("以下项目尚未纳入测试范围，可优先补选以满足最低风险覆盖要求。")
         else:
             st.caption("已达到当前覆盖要求；下列项目为尚未纳入测试范围的剩余重大项目。")
-        unselected_cols = ["流程分类", "审计场景", "子场景标签", "科目编码", "科目描述", "金额", "占整体", "占场景", "是否额外科目"]
+        unselected_cols = ["流程分类", "审计场景", "子场景标签", "科目编码", "科目描述", "金额", "占整体", "占场景"]
         unselected_display = unselected_display[unselected_cols]
         unselected_display["金额"] = unselected_display["金额"].map(lambda value: f"{float(value):,.2f}")
         unselected_display["占整体"] = unselected_display["占整体"].map(lambda value: f"{float(value):.2f}%")
@@ -1708,7 +1772,6 @@ def build_audit_dashboard_rows(ranked):
     detail_lookup = scenario_account_detail_lookup(ranked)
     for scenario in ranked or []:
         scenario_name = str(scenario.get("name", "") or "").strip()
-        baseline_company = str(scenario.get("baseline_company_code", "") or "").strip()
         for company in scenario.get("company_values", []) or []:
             company_code = str(company.get("company_code", "未指定公司") or "未指定公司")
             for account in company.get("account_values", []) or []:
@@ -1730,8 +1793,6 @@ def build_audit_dashboard_rows(ranked):
                     "借方金额": debit_value,
                     "贷方金额": credit_value,
                     "合计金额": total_value,
-                    "是否额外科目": "是" if account.get("is_extra") else "否",
-                    "基准公司": baseline_company,
                 })
     return pd.DataFrame(rows)
 
@@ -1784,7 +1845,7 @@ def render_general_audit_dashboard(ranked):
 
         st.info(
             "审计价值摘要：当前已把 SAP 自动过账配置转化为可审计的业务场景与财务科目清单。"
-            "下一步补充金额表后，系统会自动生成场景金额排行、重点科目贡献、额外科目提示和抽样覆盖建议。"
+            "下一步补充金额表后，系统会自动生成场景金额排行、重点科目贡献、科目数量覆盖率和抽样覆盖建议。"
         )
 
         if not mapping_df.empty:
@@ -1815,14 +1876,12 @@ def render_general_audit_dashboard(ranked):
     scenario_count = int(dashboard_df["审计场景"].nunique())
     company_count = int(dashboard_df["公司代码"].nunique())
     account_count = int(dashboard_df["科目编码"].nunique())
-    extra_count = int((dashboard_df["是否额外科目"] == "是").sum())
 
-    metric_cols = st.columns(5)
+    metric_cols = st.columns(4)
     metric_cols[0].metric("覆盖审计场景", f"{scenario_count}")
     metric_cols[1].metric("涉及公司", f"{company_count}")
     metric_cols[2].metric("命中科目", f"{account_count}")
     metric_cols[3].metric("归集金额", f"{total_amount:,.2f}")
-    metric_cols[4].metric("额外科目记录", f"{extra_count}")
 
     scenario_totals = (
         dashboard_df.groupby("审计场景", as_index=False)["合计金额"]
@@ -1836,11 +1895,10 @@ def render_general_audit_dashboard(ranked):
         .sort_values("合计金额", ascending=False)
         .head(5)
     )
-    extra_companies = (
-        dashboard_df[dashboard_df["是否额外科目"] == "是"]
-        .groupby("公司代码", as_index=False)
-        .size()
-        .sort_values("size", ascending=False)
+    concentrated_companies = (
+        dashboard_df.groupby("公司代码", as_index=False)["合计金额"]
+        .sum()
+        .sort_values("合计金额", ascending=False)
         .head(3)
     )
     sample_focus = top_accounts.head(3).apply(
@@ -1852,9 +1910,9 @@ def render_general_audit_dashboard(ranked):
         f"金额影响最大的场景是 **{top_scenario['审计场景']}**，归集金额 **{float(top_scenario['合计金额']):,.2f}**。",
         f"金额贡献最高的科目是 **{top_accounts.iloc[0]['科目编码']} {top_accounts.iloc[0]['科目描述']}**，建议优先纳入样本覆盖。",
     ]
-    if not extra_companies.empty:
-        company_text = "、".join(f"{row['公司代码']}（{int(row['size'])} 条）" for _, row in extra_companies.iterrows())
-        summary_lines.append(f"额外科目较集中的公司包括：**{company_text}**，建议复核其业务模式或配置差异。")
+    if not concentrated_companies.empty:
+        company_text = "、".join(f"{row['公司代码']}（{float(row['合计金额']):,.2f}）" for _, row in concentrated_companies.iterrows())
+        summary_lines.append(f"自动分录金额较集中的公司包括：**{company_text}**，建议结合样本覆盖情况安排穿行测试。")
     if sample_focus:
         summary_lines.append("建议优先抽样对象：" + "；".join(sample_focus[:3]) + "。")
 
@@ -1864,7 +1922,7 @@ def render_general_audit_dashboard(ranked):
     render_testing_coverage_dashboard(ranked)
 
     with st.expander("原始审计影响明细（可选）", expanded=False):
-        filter_cols = st.columns([1.3, 1.3, 1, 1])
+        filter_cols = st.columns([1.3, 1.3, 1])
         selected_scenarios = filter_cols[0].multiselect(
             "审计场景",
             sorted(dashboard_df["审计场景"].dropna().unique()),
@@ -1879,24 +1937,21 @@ def render_general_audit_dashboard(ranked):
             placeholder="全部公司",
             key="raw_detail_companies",
         )
-        extra_only = filter_cols[2].checkbox("只看额外科目", key="raw_detail_extra_only")
-        min_amount = filter_cols[3].number_input("金额阈值", min_value=0.0, value=0.0, step=10000.0, key="raw_detail_min_amount")
+        min_amount = filter_cols[2].number_input("金额阈值", min_value=0.0, value=0.0, step=10000.0, key="raw_detail_min_amount")
 
         filtered = dashboard_df.copy()
         if selected_scenarios:
             filtered = filtered[filtered["审计场景"].isin(selected_scenarios)]
         if selected_companies:
             filtered = filtered[filtered["公司代码"].isin(selected_companies)]
-        if extra_only:
-            filtered = filtered[filtered["是否额外科目"] == "是"]
         if min_amount:
             filtered = filtered[filtered["合计金额"].abs() >= float(min_amount)]
 
         available_columns = [
             "流程分类", "审计场景", "子场景标签", "公司代码", "科目编码", "科目描述",
-            "合计金额", "借方金额", "贷方金额", "是否额外科目", "基准公司",
+            "合计金额", "借方金额", "贷方金额",
         ]
-        default_columns = ["审计场景", "子场景标签", "公司代码", "科目编码", "科目描述", "合计金额", "是否额外科目"]
+        default_columns = ["审计场景", "子场景标签", "公司代码", "科目编码", "科目描述", "合计金额"]
         selected_columns = st.multiselect(
             "显示字段",
             available_columns,
@@ -1934,14 +1989,11 @@ def render_scenario_preview(ranked, show_amount=False):
         direction_filter = "全部"
 
         def account_chip(account, amount_value):
-            chip_class = "account-detail-chip account-extra-chip" if account.get("is_extra") else "account-detail-chip"
-            extra_badge = "<span class='extra-badge'>额外</span>" if account.get("is_extra") else ""
             return (
-                f"<span class='{chip_class}'>"
+                "<span class='account-detail-chip'>"
                 f"<span class='account-code'>{html.escape(str(account.get('account', '')))}</span>"
                 f"<span class='account-desc'>{html.escape(str(account.get('description', '未知科目')))}</span>"
                 f"<span class='account-amount'>{float(amount_value or 0):,.2f}</span>"
-                f"{extra_badge}"
                 "</span>"
             )
 
@@ -1996,13 +2048,10 @@ def render_scenario_preview(ranked, show_amount=False):
             }
 
         company_codes = set()
-        has_extra_accounts = False
         for result in ranked:
             for item in result.get("company_values", []):
                 company_code = str(item.get("company_code", "未指定公司"))
                 company_codes.add(company_code)
-                if any(account.get("is_extra") for account in item.get("account_values", [])):
-                    has_extra_accounts = True
         company_codes = sorted(company_codes)
 
         if not company_codes:
@@ -2011,10 +2060,6 @@ def render_scenario_preview(ranked, show_amount=False):
 
         summary_rows = []
         for row in build_scenario_account_totals(ranked, direction_filter=direction_filter):
-            extra_note = (
-                f"<span class='summary-extra-note'>{int(row.get('extra_company_count', 0))} 家含额外科目</span>"
-                if int(row.get("extra_company_count", 0) or 0) else ""
-            )
             company_codes_text = "、".join(str(code) for code in row.get("company_codes", []))
             subscenario_labels = subscenario_labels_for_summary_row(row, ranked)
             subscenario_html = label_chips_html(subscenario_labels)
@@ -2042,7 +2087,6 @@ def render_scenario_preview(ranked, show_amount=False):
                 f"<span class='amount'>{float(row.get('total_value', 0) or 0):,.2f}</span>"
                 f"<span class='amount-share'>{float(row.get('amount_share_pct', 0) or 0):.2f}%</span>"
                 f"<span class='summary-company-count' title='{html.escape(company_codes_text)}'>{int(row.get('company_count', 0) or 0)}</span>"
-                f"<span>{extra_note}</span>"
                 "</summary>"
                 "<div class='summary-side-panel'>"
                 "<div class='side-metric-row'>"
@@ -2063,7 +2107,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 "<section class='scenario-total-summary'>"
                 "<div class='summary-title'>场景科目总金额汇总 <span class='summary-subtitle'>点击科目行展开借贷明细</span></div>"
                 "<div class='summary-row-grid summary-header'>"
-                "<span>审计场景</span><span>子场景标签</span><span>科目编码</span><span>科目描述</span><span class='amount'>总金额</span><span class='amount-share'>占比</span><span>命中公司数</span><span>提示</span>"
+                "<span>审计场景</span><span>子场景标签</span><span>科目编码</span><span>科目描述</span><span class='amount'>总金额</span><span class='amount-share'>占比</span><span>命中公司数</span>"
                 "</div>"
                 f"<div class='summary-accordion'>{''.join(summary_rows)}</div>"
                 "</section>"
@@ -2092,14 +2136,9 @@ def render_scenario_preview(ranked, show_amount=False):
                     )
                 else:
                     account_html = "<span class='empty-cell'>该公司最后期间未命中此场景科目</span>"
-                baseline_company_code = result.get("baseline_company_code")
-                baseline_html = (
-                    f"<span class='baseline-pill'>基准公司：{html.escape(str(baseline_company_code))}</span>"
-                    if baseline_company_code else ""
-                )
                 scenario_rows.append(
                     "<tr>"
-                    f"<td class='scenario-name'>{html.escape(str(result.get('name', '')))}{baseline_html}</td>"
+                    f"<td class='scenario-name'>{html.escape(str(result.get('name', '')))}</td>"
                     f"<td class='amount'>{scenario_amount:,.2f}</td>"
                     f"<td class='accounts-cell'>{account_html}</td>"
                     "</tr>"
@@ -2116,13 +2155,7 @@ def render_scenario_preview(ranked, show_amount=False):
                 "</details>"
             )
 
-        legend_html = (
-            "<div class='scenario-baseline-legend'>"
-            "<span class='legend-swatch'></span>"
-            "高亮 = 相比该场景基准公司多出的实际命中科目"
-            "</div>"
-            if has_extra_accounts else ""
-        )
+        legend_html = ""
 
         table_html = textwrap.dedent(f"""
             <style>
@@ -2160,7 +2193,7 @@ def render_scenario_preview(ranked, show_amount=False):
             }}
             .summary-row-grid {{
                 display: grid;
-                grid-template-columns: minmax(140px, .9fr) minmax(180px, 1.1fr) minmax(130px, .75fr) minmax(260px, 1.8fr) minmax(140px, .85fr) minmax(90px, .55fr) minmax(100px, .65fr) minmax(120px, .75fr);
+                grid-template-columns: minmax(140px, .9fr) minmax(180px, 1.1fr) minmax(130px, .75fr) minmax(260px, 1.8fr) minmax(140px, .85fr) minmax(90px, .55fr) minmax(100px, .65fr);
                 align-items: center;
                 gap: 0;
                 min-width: 1280px;
@@ -2289,17 +2322,6 @@ def render_scenario_preview(ranked, show_amount=False):
                 text-align: right;
                 white-space: nowrap;
             }}
-            .summary-extra-note {{
-                display: inline-block;
-                border-radius: 999px;
-                background: #fff4db;
-                border: 1px solid #f0b64a;
-                color: #8a5200;
-                padding: 1px 8px;
-                font-size: 12px;
-                font-weight: 700;
-                white-space: nowrap;
-            }}
             .company-scenario-section summary {{
                 cursor: pointer;
                 padding: 12px 14px;
@@ -2335,14 +2357,6 @@ def render_scenario_preview(ranked, show_amount=False):
                 color: #1a1a1a;
                 font-weight: 600;
             }}
-            .baseline-pill {{
-                display: block;
-                margin-top: 4px;
-                color: #006b6b;
-                font-size: 12px;
-                font-weight: 600;
-                line-height: 1.4;
-            }}
             .company-scenario-table .amount {{
                 width: 12%;
                 min-width: 130px;
@@ -2376,45 +2390,6 @@ def render_scenario_preview(ranked, show_amount=False):
                 color: #006b6b;
                 font-weight: 700;
                 white-space: nowrap;
-            }}
-            .account-extra-chip {{
-                background: #fff4db;
-                border: 1px solid #f0b64a;
-                color: #694700;
-            }}
-            .account-extra-chip .account-code,
-            .account-extra-chip .account-amount {{
-                color: #8a5200;
-            }}
-            .extra-badge {{
-                border-radius: 999px;
-                background: #d97900;
-                color: #fff;
-                font-size: 11px;
-                font-weight: 700;
-                padding: 0 6px;
-                line-height: 1.5;
-            }}
-            .scenario-baseline-legend {{
-                display: inline-flex;
-                align-items: center;
-                gap: 8px;
-                width: fit-content;
-                padding: 6px 10px;
-                border-radius: 8px;
-                background: #fff8e8;
-                color: #6b4b00;
-                border: 1px solid #f0d088;
-                font-size: 13px;
-                font-weight: 600;
-            }}
-            .legend-swatch {{
-                display: inline-block;
-                width: 14px;
-                height: 14px;
-                border-radius: 999px;
-                background: #fff4db;
-                border: 1px solid #f0b64a;
             }}
             .empty-cell {{
                 color: #8a94a6;
@@ -2784,6 +2759,7 @@ elif st.session_state.current_step == 3:
         st.info("可以先跳过金额表，直接上传样本或凭证截图生成底稿；审计影响金额将在上传金额表后显示。")
 
     ensure_scenario_preview_current()
+    render_account_quantity_coverage(st.session_state.scenario_preview)
     render_general_audit_dashboard(st.session_state.scenario_preview)
 
     st.write("---")
@@ -2874,14 +2850,14 @@ elif st.session_state.current_step == 3:
                     width="stretch",
                 )
             with export_cols[1]:
-                st.caption("抽样场景表包含公司代码、评估分组、审计场景、科目、金额、额外科目标记，以及物料主数据补充信息。")
+                st.caption("抽样场景表包含公司代码、评估分组、审计场景、科目、金额、占比，以及物料主数据补充信息。")
             with st.expander("预览抽样场景表", expanded=False):
                 st.dataframe(sampling_df.head(50), width="stretch")
 
     st.write("---")
     sample_scenario_options = scenario_names_from_preview()
     if not sample_scenario_options:
-        st.warning("请先完成场景匹配，系统需要 10 个审计场景后才能录入样本。")
+        st.warning("请先完成场景匹配，系统需要已识别的审计场景后才能录入样本。")
         st.stop()
     st.caption("如同时上传采购、销售等不同场景的样本，请在上传后按文件分别选择对应审计场景。")
     samples_files = []
@@ -2995,7 +2971,7 @@ elif st.session_state.current_step == 3:
         render_sample_source_scenario_controls(combined_sample_records, sample_scenario_options)
         combined_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
         st.write("**📋 已录入样本预览**")
-        preferred_columns = ["SOURCE_TYPE", "SOURCE_FILE", "SCENARIO", "DOC_NUM", "DATE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG"]
+        preferred_columns = ["SOURCE_TYPE", "SOURCE_FILE", "SCENARIO", "DOC_NUM", "COMPANY_CODE", "DATE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "KTOSL", "KOMOK"]
         ocr_df = prepare_sample_editor_dataframe(
             combined_sample_records,
             sample_scenario_options,
@@ -3011,17 +2987,31 @@ elif st.session_state.current_step == 3:
                 "SOURCE_FILE": st.column_config.TextColumn("来源文件", disabled=True),
                 "SCENARIO": st.column_config.SelectboxColumn("审计场景", options=sample_scenario_options, required=True),
                 "DOC_NUM": st.column_config.TextColumn("DOC_NUM", required=True),
+                "COMPANY_CODE": st.column_config.TextColumn("COMPANY_CODE"),
                 "DATE": st.column_config.TextColumn("DATE"),
                 "SAKNR": st.column_config.TextColumn("SAKNR", required=True),
                 "TXT50": st.column_config.TextColumn("TXT50"),
                 "MATNR": st.column_config.TextColumn("MATNR"),
                 "AMOUNT": st.column_config.TextColumn("AMOUNT", required=True),
                 "SHKZG": st.column_config.TextColumn("SHKZG"),
+                "KTOSL": st.column_config.TextColumn("KTOSL"),
+                "KOMOK": st.column_config.TextColumn("KOMOK"),
             },
         )
         edited_records = edited_ocr_df.fillna("").to_dict("records")
         st.session_state.sample_table_records, st.session_state.ocr_samples = split_sample_preview_records(edited_records)
         sync_source_scenarios_from_records(edited_records, sample_scenario_options)
+        validation_df = validate_voucher_t030_logic(
+            pd.DataFrame(edited_records),
+            load_session_table("T030"),
+            load_session_table("T001K"),
+            st.session_state.mm03_records,
+        )
+        st.session_state.voucher_validation_records = validation_df.to_dict("records") if not validation_df.empty else []
+        if not validation_df.empty:
+            with st.expander("凭证到 T030 配置验证结果", expanded=True):
+                st.caption("基于凭证公司代码、物料号、T001K 评估分组、MM03 评估分类和 T030 配置，判断样本科目是否按自动过账逻辑生成。")
+                st.dataframe(validation_df, width="stretch", hide_index=True)
     st.write("---")
     nav_cols = st.columns([1, 1.5, 1.5, 1])
     with nav_cols[1]:
@@ -3038,21 +3028,40 @@ elif st.session_state.current_step == 3:
                 c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
                 invalid_rows = valid_sample_scenarios(final_sample_records, sample_scenario_options)
                 if invalid_rows:
-                    st.error(f"请为每条样本指定 10 个审计场景之一；以下行未完成选择：{', '.join(map(str, invalid_rows[:20]))}")
+                    st.error(f"请为每条样本指定一个已识别审计场景；以下行未完成选择：{', '.join(map(str, invalid_rows[:20]))}")
                     st.stop()
                 lines = []
                 for s in final_sample_records:
-                    lines.append({"SCENARIO": s.get("SCENARIO"), "DOC_NUM": s.get("DOC_NUM"), "SAKNR": s.get("SAKNR"), "TXT50": s.get("TXT50"), "MATNR": s.get("MATNR"), "AMOUNT": s.get("AMOUNT"), "SHKZG": s.get("SHKZG", "S"), "DATE": s.get("DATE") or "2026-06-01"})
+                    lines.append({
+                        "SCENARIO": s.get("SCENARIO"),
+                        "DOC_NUM": s.get("DOC_NUM"),
+                        "COMPANY_CODE": s.get("COMPANY_CODE"),
+                        "SAKNR": s.get("SAKNR"),
+                        "TXT50": s.get("TXT50"),
+                        "MATNR": s.get("MATNR"),
+                        "AMOUNT": s.get("AMOUNT"),
+                        "SHKZG": s.get("SHKZG", "S"),
+                        "DATE": s.get("DATE") or "2026-06-01",
+                        "KTOSL": s.get("KTOSL"),
+                        "KOMOK": s.get("KOMOK"),
+                    })
                 s_df = pd.DataFrame(lines)
                 s_df = Core2Orchestrator.normalize_samples_dataframe(s_df)
-                for col in ["SCENARIO", "DOC_NUM", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE"]:
+                for col in ["SCENARIO", "DOC_NUM", "COMPANY_CODE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE", "KTOSL", "KOMOK"]:
                     if col not in s_df.columns:
                         s_df[col] = ""
                 if s_df["SCENARIO"].astype(str).str.strip().isin(["", AUTO_SCENARIO_LABEL]).any():
-                    st.error("请为每条样本指定 10 个审计场景之一。")
+                    st.error("请为每条样本指定一个已识别审计场景。")
                     st.stop()
-                s_df = s_df[["SCENARIO", "DOC_NUM", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE"]]
+                s_df = s_df[["SCENARIO", "DOC_NUM", "COMPANY_CODE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE", "KTOSL", "KOMOK"]]
                 s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding='utf-8-sig')
+                validation_df = validate_voucher_t030_logic(
+                    s_df,
+                    load_session_table("T030"),
+                    load_session_table("T001K"),
+                    st.session_state.mm03_records,
+                )
+                st.session_state.voucher_validation_records = validation_df.to_dict("records") if not validation_df.empty else []
                 
                 # Debug: Show internal stats if results are weird
                 if not ranked:
@@ -3068,12 +3077,14 @@ elif st.session_state.current_step == 3:
                     from llm_client import LLMClient
                     c2.llm_client = LLMClient(api_key=DEFAULT_KEY, model_name=selected_model)
                 
-                di = c2.generate_di_descriptions(ranked, st.session_state.audit_context)
+                audit_context = dict(st.session_state.audit_context)
+                audit_context["voucher_validation"] = st.session_state.voucher_validation_records
+                di = c2.generate_di_descriptions(ranked, audit_context)
                 
                 if not di:
                     st.info("💡 提示：未能从上传的凭证截图或 Samples 列表中找到与审计场景匹配的样本项目。")
                 
-                gen = ReportGenerator(SESSION_DATA_DIR); path = gen.generate(ranked, di, st.session_state.audit_context)
+                gen = ReportGenerator(SESSION_DATA_DIR); path = gen.generate(ranked, di, audit_context)
                 st.session_state.results = {"ranked": ranked, "di": di, "report_path": path}
                 st.session_state.show_balloons = True; st.rerun()
 

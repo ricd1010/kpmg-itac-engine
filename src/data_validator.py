@@ -142,7 +142,7 @@ class DataValidator:
 
             for i in range(df.shape[1]):
                 col_name = df.columns[i]
-                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC", "BWKEY", "BUKRS", "BWMOD", "BKLAS", "MATNR"]):
+                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC", "BWKEY", "BUKRS", "COMPANY_CODE", "BWMOD", "BKLAS", "MATNR"]):
                     df.iloc[:, i] = df.iloc[:, i].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
                 if any(k in col_name for k in ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]):
                     s = df.iloc[:, i].astype(str).str.replace(r'[^0-9.\-]', '', regex=True)
@@ -188,6 +188,7 @@ class DataValidator:
             "已结转余额": 15, "前一期间的余额": 15, "在制表期间的借方余额": 15,
             "本月借方发生额": 15, "本年借方累计": 15, "本年贷方累计": 15, "会计期间": 15, "公司代码": 15,
             "bwkey": 20, "bukrs": 20, "bwmod": 20, "评估范围": 20, "评估分组": 20,
+            "buchungskreis": 20, "bewertungsmodifikation": 20, "bewertungsklasse": 20, "sachkonto": 20,
             "txt50": 10, "短文本": 10, "科目名称": 10, "科目描述": 10, "科目编码": 10, "帐目表": 10
         }
         # 严禁词：只针对纯粹的 metadata 标题
@@ -279,34 +280,35 @@ class DataValidator:
     @staticmethod
     def _map_columns(df, file_type):
         common_mapping = {
-            "SAKNR": ["saknr", "总账科目", "总帐科目", "G/L Account", "科目"],
-            "TXT50": ["txt50", "科目描述", "科目名称", "短文本", "总分类帐名称"],
+            "COMPANY_CODE": ["company_code", "bukrs", "公司代码", "公司编码", "公司", "Company Code", "buchungskreis", "bukr", "CoCd"],
+            "SAKNR": ["saknr", "总账科目", "总帐科目", "G/L Account", "科目", "sachkonto", "hauptbuchkonto"],
+            "TXT50": ["txt50", "科目描述", "科目名称", "短文本", "总分类帐名称", "kurztext", "bezeichnung"],
             "DMBTR_DEBIT": ["dmbtr_debit", "借方金额", "在制表期间的借方余额", "已结转余额", "借方", "前一期间的余额"],
             "DMBTR_CREDIT": ["dmbtr_credit", "贷方金额", "报表期间的贷方余额", "累计余额", "贷方"],
-            "DOC_NUM": ["doc_num", "凭证号", "会计凭证", "采购凭证", "开票凭证", "订单", "记账代码", "记帐代码"],
-            "DATE": ["date", "日期", "过账日期"],
-            "AMOUNT": ["amount", "金额", "交易金额"],
-            "SHKZG": ["shkzg", "借/贷标识", "S/H"],
+            "DOC_NUM": ["doc_num", "凭证号", "会计凭证", "采购凭证", "开票凭证", "订单", "记账代码", "记帐代码", "belegnummer", "document number"],
+            "DATE": ["date", "日期", "过账日期", "buchungsdatum", "posting date"],
+            "AMOUNT": ["amount", "金额", "交易金额", "betrag"],
+            "SHKZG": ["shkzg", "借/贷标识", "S/H", "soll/haben", "debit/credit"],
             "SCENARIO": ["scenario", "audit_scenario", "审计场景", "场景", "目标场景", "测试场景"],
-            "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
-            "KOMOK": ["komok", "科目修改", "修改码", "AM"],
-            "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "物料代码", "Material"],
+            "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS", "vorgang"],
+            "KOMOK": ["komok", "科目修改", "修改码", "AM", "kontomodifikation"],
+            "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "物料代码", "Material", "materialnummer"],
         }
         if file_type == "T030":
             mapping = {
-                "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS"],
-                "KOMOK": ["komok", "科目修改", "修改码", "AM"],
-                "BWMOD": ["bwmod", "评估分组", "评估分组代码", "代码", "valuation grouping code", "valuationgroupingcode"],
-                "BKLAS": ["bklas", "valcl", "评估类", "评估类字段", "valuation class", "valuationclass"],
-                "KONTS": ["konts", "借方科目", "总帐科目", "总账科目"],
-                "KONTH": ["konth", "贷方科目", "总帐科目", "总账科目"],
+                "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS", "vorgang"],
+                "KOMOK": ["komok", "科目修改", "修改码", "AM", "kontomodifikation"],
+                "BWMOD": ["bwmod", "评估分组", "评估分组代码", "代码", "valuation grouping code", "valuationgroupingcode", "bewertungsmodifikation", "bewertmodif"],
+                "BKLAS": ["bklas", "valcl", "评估类", "评估类字段", "valuation class", "valuationclass", "bewertungsklasse"],
+                "KONTS": ["konts", "借方科目", "总帐科目", "总账科目", "sollkonto", "sachkonto"],
+                "KONTH": ["konth", "贷方科目", "总帐科目", "总账科目", "habenkonto", "sachkonto"],
             }
         elif file_type == "TrialBalance":
             mapping = {
-                "COMPANY_CODE": ["company_code", "bukrs", "公司代码", "公司编码", "公司", "Company Code"],
+                "COMPANY_CODE": ["company_code", "bukrs", "公司代码", "公司编码", "公司", "Company Code", "buchungskreis", "bukr", "CoCd"],
                 "PERIOD": ["period", "monat", "会计期间", "会计期", "年月", "月份"],
-                "SAKNR": ["saknr", "科目编码", "科目代码", "总账科目", "总帐科目", "G/L Account", "科目"],
-                "TXT50": ["txt50", "科目名称", "科目描述", "短文本", "总分类帐名称"],
+                "SAKNR": ["saknr", "科目编码", "科目代码", "总账科目", "总帐科目", "G/L Account", "科目", "sachkonto", "hauptbuchkonto"],
+                "TXT50": ["txt50", "科目名称", "科目描述", "短文本", "总分类帐名称", "kurztext", "bezeichnung"],
                 "DMBTR_DEBIT": [
                     "dmbtr_debit", "本月借方发生额", "借方发生额", "借方金额",
                     "本年借方累计", "借方累计", "累计借方", "在制表期间的借方余额"
@@ -318,8 +320,8 @@ class DataValidator:
             }
         elif file_type == "T001K":
             mapping = {
-                "BUKRS": ["bukrs", "公司代码", "公司编码", "company code", "companycode"],
-                "BWMOD": ["bwmod", "评估分组", "评估分组代码", "valuation grouping code", "valuationgroupingcode"],
+                "BUKRS": ["bukrs", "公司代码", "公司编码", "company code", "companycode", "buchungskreis", "bukr"],
+                "BWMOD": ["bwmod", "评估分组", "评估分组代码", "valuation grouping code", "valuationgroupingcode", "bewertungsmodifikation", "bewertmodif"],
             }
         else:
             mapping = common_mapping

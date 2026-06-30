@@ -67,6 +67,7 @@ class OCRProcessor:
 ### 目标：
 识别凭证表格中的所有会计分录行项目，不要只提取目标科目行。必须提取：
 - DOC_NUM (凭证号)
+- COMPANY_CODE (公司代码/CoCd/Bukrs；若截图中没有则返回空字符串)
 - SAKNR (科目)
 - TXT50 (名称/总分类账名称)
 - MATNR (物料号；若截图中没有物料号则返回空字符串)
@@ -82,7 +83,7 @@ class OCRProcessor:
 ### 格式要求：
 直接返回一个 JSON 数组，例如：
 [
-  {{"DOC_NUM": "...", "SAKNR": "...", "TXT50": "...", "MATNR": "...", "AMOUNT": 12.34, "SHKZG": "S", "DATE": "2026-06-01"}},
+  {{"DOC_NUM": "...", "COMPANY_CODE": "...", "SAKNR": "...", "TXT50": "...", "MATNR": "...", "AMOUNT": 12.34, "SHKZG": "S", "DATE": "2026-06-01"}},
   ...
 ]
 """
@@ -133,6 +134,7 @@ class OCRProcessor:
             mapping = {
                 "DOC_NUM": ["doc_num", "凭证号", "开票凭证", "凭证编号"],
                 "DATE": ["date", "日期", "过账日期", "记账日期", "凭证日期"],
+                "COMPANY_CODE": ["company_code", "公司代码", "公司", "cocd", "bukrs"],
                 "SAKNR": ["saknr", "科目", "总账科目", "帐目", "代码"],
                 "TXT50": ["txt50", "科目名称", "描述", "短文本", "名称"],
                 "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "Material"],

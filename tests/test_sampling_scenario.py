@@ -12,7 +12,6 @@ from sampling_scenario import build_sampling_scenario_table
 def test_sampling_scenario_table_enriches_company_with_t001k():
     ranked = [{
         "name": "完工入库",
-        "baseline_company_code": "4000",
         "account_details": [{
             "account": "5001080000",
             "description": "生产成本-半成品完工转出",
@@ -29,7 +28,6 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
                 "account": "5001080000",
                 "description": "生产成本-半成品完工转出",
                 "total_value": 100.0,
-                "is_extra": False,
             }],
         }],
     }]
@@ -70,10 +68,9 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
     assert "评估类" not in df.columns
 
 
-def test_sampling_scenario_table_marks_extra_accounts():
+def test_sampling_scenario_table_no_longer_exposes_extra_account_columns():
     ranked = [{
         "name": "工单差异",
-        "baseline_company_code": "4000",
         "company_values": [{
             "company_code": "4100",
             "total_value": 300.0,
@@ -81,15 +78,15 @@ def test_sampling_scenario_table_marks_extra_accounts():
                 "account": "1405050100",
                 "description": "库存商品-自制成品差异-采购差异",
                 "total_value": 300.0,
-                "is_extra": True,
             }],
         }],
     }]
 
     df = build_sampling_scenario_table(ranked)
 
-    assert df.iloc[0]["是否额外科目"] == "是"
-    assert "优先抽样" in df.iloc[0]["抽样建议"]
+    assert "是否额外科目" not in df.columns
+    assert "基准公司" not in df.columns
+    assert df.iloc[0]["抽样建议"] == "按场景金额、科目占比和样本覆盖情况抽样"
 
 
 def test_sampling_scenario_table_supports_step2_preview_without_balance():
@@ -118,7 +115,6 @@ def test_sampling_scenario_table_matches_multiple_mm03_records_with_fuzzy_plant(
                 "account": "5001010000",
                 "description": "生产成本-原辅料",
                 "total_value": 500.0,
-                "is_extra": False,
             }],
         }],
     }]

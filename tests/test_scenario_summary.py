@@ -37,7 +37,7 @@ def test_build_scenario_account_totals_sums_same_account_across_companies():
                 "company_code": "4000",
                 "account_values": [
                     {"account": "1403000000", "description": "原材料", "total_value": 10.0},
-                    {"account": "2202040000", "description": "应付账款-GR/IR", "total_value": 5.0, "is_extra": True},
+                    {"account": "2202040000", "description": "应付账款-GR/IR", "total_value": 5.0},
                 ],
             },
             {
@@ -74,7 +74,6 @@ def test_build_scenario_account_totals_sums_same_account_across_companies():
     assert gr_ir["scenario_total_value"] == 22.0
     assert round(gr_ir["amount_share_pct"], 2) == 22.73
     assert gr_ir["company_count"] == 1
-    assert gr_ir["extra_company_count"] == 1
 
 
 def test_build_scenario_account_totals_ignores_empty_company_values():

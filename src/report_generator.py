@@ -131,8 +131,19 @@ class ReportGenerator:
             ws_wgll.cell(row=i+3, column=1, value=text)
         ws_wgll.column_dimensions['A'].width = 100
 
+        scenario_lookup = {
+            str(item.get("name", "") or ""): item
+            for item in ranked_scenarios or []
+        }
+        scenario_names = [str(item.get("name", "") or "") for item in ranked_scenarios or [] if item.get("name")]
+        for scenario_name in di_map:
+            if scenario_name not in scenario_names:
+                scenario_names.append(scenario_name)
+
         # 2. Detailed D&I Sheets (Based on Standard Template)
-        for scenario_name, results in di_map.items():
+        for scenario_name in scenario_names:
+            results = di_map.get(scenario_name, [])
+            scenario_payload = scenario_lookup.get(scenario_name, {})
             # Create a safe sheet name
             safe_title = "".join([c for c in scenario_name if c.isalnum() or c==' '])[:31].strip()
             ws = wb.create_sheet(title=safe_title)
@@ -170,6 +181,40 @@ class ReportGenerator:
             ws["E8"].border = thin_border
             ws["E8"].alignment = Alignment(wrap_text=True)
 
+            # Scenario account requirements
+            ws["D10"] = "一、场景借贷科目及凭证要求"
+            ws["D10"].font = Font(bold=True)
+            requirement_headers = ["借贷方向", "科目", "科目描述", "配置/凭证要求"]
+            for offset, header in enumerate(requirement_headers):
+                cell = ws.cell(row=11, column=4 + offset, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="E5E5E5", end_color="E5E5E5", fill_type="solid")
+                cell.border = thin_border
+                cell.alignment = align_center
+            requirement_rows = []
+            for detail in scenario_payload.get("account_details", []) or []:
+                requirement_rows.append([
+                    detail.get("direction", ""),
+                    detail.get("account", ""),
+                    detail.get("description", ""),
+                    "凭证科目应与该场景自动分录配置方向一致；如提供物料号，应结合 MM03/T001K/T030 进行核对。",
+                ])
+            if not requirement_rows:
+                for account in scenario_payload.get("accounts", []) or []:
+                    account_text = str(account)
+                    account_code = account_text.split(" ")[0] if account_text else ""
+                    requirement_rows.append([
+                        "",
+                        account_code,
+                        account_text,
+                        "请结合 T030/SKAT 映射与样本凭证核对。",
+                    ])
+            for row_idx, values in enumerate(requirement_rows[:5], start=12):
+                for offset, value in enumerate(values):
+                    cell = ws.cell(row=row_idx, column=4 + offset, value=value)
+                    cell.border = thin_border
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+
             # Row 17: Table Headers
             cols = ["D", "E", "F", "G", "H"]
             headers = ["流程风险点 / PRP ID", "流程风险点 / PRP(s)", "重大错报风险 / RMM", "信息 / Information", "该流程控制活动如何应对流程风险点(PRP)"]
@@ -182,7 +227,7 @@ class ReportGenerator:
 
             # Row 18: TOD Narrative (Use first sample's D&I text)
             ws[f"D18"] = "PRP_01"
-            ws[f"H18"] = results[0]['di_description']
+            ws[f"H18"] = results[0]['di_description'] if results else "本场景已纳入测试范围框定；尚未上传或匹配到该场景的样本凭证。"
             ws[f"H18"].alignment = Alignment(wrap_text=True, vertical="top")
             for col in cols: ws[f"{col}18"].border = thin_border
 

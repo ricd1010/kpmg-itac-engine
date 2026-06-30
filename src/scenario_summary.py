@@ -39,7 +39,6 @@ def build_scenario_account_totals(ranked, direction_filter="全部"):
                     "credit_value": 0.0,
                     "company_codes": set(),
                     "company_amounts": {},
-                    "extra_company_count": 0,
                 })
                 debit_value = amount_for_direction(account, "借方")
                 credit_value = amount_for_direction(account, "贷方")
@@ -56,8 +55,6 @@ def build_scenario_account_totals(ranked, direction_filter="全部"):
                 company_amount["debit_value"] += debit_value
                 company_amount["credit_value"] += credit_value
                 company_amount["total_value"] += amount_value
-                if account.get("is_extra"):
-                    entry["extra_company_count"] += 1
                 description = str(account.get("description", "")).strip()
                 if description and entry["description"] == "未知科目":
                     entry["description"] = description
@@ -84,7 +81,6 @@ def build_scenario_account_totals(ranked, direction_filter="全部"):
                         str(item["company_code"])
                     )
                 ),
-                "extra_company_count": entry["extra_company_count"],
             })
 
     return sorted(
