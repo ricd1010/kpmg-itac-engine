@@ -8,9 +8,10 @@ class DataValidator:
 
     REQUIRED_COLUMNS = {
         "SKAT": ["SAKNR", "TXT50"],
-        "T030": ["KONTS", "KONTH"], 
+        "T030": ["KTOSL", "KONTS", "KONTH"],
         "TrialBalance": ["SAKNR", "DMBTR_DEBIT"],
         "Samples": ["DOC_NUM", "SAKNR", "AMOUNT"],
+        "Ledger": ["DOC_NUM", "SAKNR", "AMOUNT"],
         "T001K": ["BUKRS", "BWMOD"]
     }
 
@@ -142,7 +143,7 @@ class DataValidator:
 
             for i in range(df.shape[1]):
                 col_name = df.columns[i]
-                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC", "BWKEY", "BUKRS", "COMPANY_CODE", "BWMOD", "BKLAS", "MATNR"]):
+                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC", "BWKEY", "BUKRS", "COMPANY_CODE", "BWMOD", "BKLAS", "MATNR", "WERKS"]):
                     df.iloc[:, i] = df.iloc[:, i].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
                 if any(k in col_name for k in ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]):
                     s = df.iloc[:, i].astype(str).str.replace(r'[^0-9.\-]', '', regex=True)
@@ -293,6 +294,7 @@ class DataValidator:
             "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS", "vorgang"],
             "KOMOK": ["komok", "科目修改", "修改码", "AM", "kontomodifikation"],
             "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "物料代码", "Material", "materialnummer"],
+            "WERKS": ["werks", "plant", "factory", "工厂", "工厂编号", "工厂代码", "valuation area", "bwkey", "werk"],
         }
         if file_type == "T030":
             mapping = {
@@ -323,6 +325,8 @@ class DataValidator:
                 "BUKRS": ["bukrs", "公司代码", "公司编码", "company code", "companycode", "buchungskreis", "bukr"],
                 "BWMOD": ["bwmod", "评估分组", "评估分组代码", "valuation grouping code", "valuationgroupingcode", "bewertungsmodifikation", "bewertmodif"],
             }
+        elif file_type == "Ledger":
+            mapping = common_mapping
         else:
             mapping = common_mapping
 

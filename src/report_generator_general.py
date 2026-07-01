@@ -119,6 +119,41 @@ class GeneralAuditReportGenerator(ReportGenerator):
         for col, width in widths.items():
             ws.column_dimensions[col].width = width
 
+    def _write_records_sheet(self, wb, title, rows, styles):
+        if not rows:
+            return
+        ws = wb.create_sheet(title[:31])
+        blue_fill = styles["blue_fill"]
+        header_font = styles["header_font"]
+        border = styles["border"]
+        align_wrap = styles["align_wrap"]
+        section_font = styles["section_font"]
+
+        headers = []
+        for row in rows:
+            for key in row.keys():
+                if key not in headers:
+                    headers.append(key)
+        if not headers:
+            return
+
+        ws["A1"] = title
+        ws["A1"].font = section_font
+        for col, header in enumerate(headers, start=1):
+            cell = ws.cell(row=3, column=col, value=header)
+            cell.fill = blue_fill
+            cell.font = header_font
+            cell.alignment = align_wrap
+            cell.border = border
+        for row_idx, row in enumerate(rows, start=4):
+            for col, header in enumerate(headers, start=1):
+                cell = ws.cell(row=row_idx, column=col, value=row.get(header, ""))
+                cell.alignment = align_wrap
+                cell.border = border
+        for col_idx, header in enumerate(headers, start=1):
+            letter = ws.cell(row=3, column=col_idx).column_letter
+            ws.column_dimensions[letter].width = min(max(len(str(header)) + 8, 14), 36)
+
     def generate(self, ranked_scenarios, di_results, audit_context=None):
         path = super().generate(ranked_scenarios, di_results, audit_context)
         audit_context = audit_context or {}
@@ -179,13 +214,14 @@ class GeneralAuditReportGenerator(ReportGenerator):
         concentrated_companies = self._company_concentration_summary(ranked_scenarios)
         sample_counts = self._sample_counts(di_results)
         covered_scenarios = sum(1 for count in sample_counts.values() if count)
+        ledger_summary = audit_context.get("full_ledger_summary") or {}
 
         metrics = [
             ("识别业务场景", len(ranked_scenarios or [])),
             ("样本覆盖场景", covered_scenarios),
             ("归集金额", f"{sum(item['amount'] for item in scenario_totals):,.2f}"),
             ("命中科目记录", len(account_rows)),
-            ("重点公司数", len(concentrated_companies)),
+            ("全量凭证覆盖率", f"{self._num(ledger_summary.get('amount_coverage_pct')):.2f}%" if ledger_summary else "待上传序时账"),
         ]
         ws["A6"] = "关键审计指标"
         ws["A6"].font = section_font
@@ -227,6 +263,14 @@ class GeneralAuditReportGenerator(ReportGenerator):
             f"4. 建议优先抽样覆盖对象：{sample_focus_text}。",
             "5. 本底稿将自动过账配置、科目主数据、余额/发生额和样本凭证串联，用于支持审计团队理解自动分录如何影响财务报表科目。",
         ]
+        if ledger_summary:
+            summary_lines.append(
+                "6. 全量序时账实质性测试覆盖："
+                f"共 {int(ledger_summary.get('total_lines', 0)):,} 行凭证明细，"
+                f"已覆盖 {int(ledger_summary.get('covered_lines', 0)):,} 行，"
+                f"金额覆盖率 {self._num(ledger_summary.get('amount_coverage_pct')):.2f}%，"
+                f"异常/未覆盖 {int(ledger_summary.get('exception_lines', 0)):,} 行。"
+            )
         ws.merge_cells("A12:F17")
         ws["A12"] = "\n".join(summary_lines)
         ws["A12"].alignment = align_wrap
@@ -289,6 +333,25 @@ class GeneralAuditReportGenerator(ReportGenerator):
                 "align_wrap": align_wrap,
                 "section_font": section_font,
             },
+        )
+        sheet_styles = {
+            "blue_fill": blue_fill,
+            "header_font": header_font,
+            "border": border,
+            "align_wrap": align_wrap,
+            "section_font": section_font,
+        }
+        self._write_records_sheet(
+            wb,
+            "异常凭证清单",
+            audit_context.get("full_ledger_exceptions") or [],
+            sheet_styles,
+        )
+        self._write_records_sheet(
+            wb,
+            "全量标签序时账",
+            audit_context.get("full_ledger_tagged") or [],
+            sheet_styles,
         )
 
         wb.save(path)

@@ -20,6 +20,13 @@ from sampling_scenario import build_sampling_scenario_table
 from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
 from mm03_parser import mm03_records_to_dataframe_rows, parse_mm03_ocr_text
 from voucher_validation import validate_voucher_t030_logic
+from ledger_analysis import (
+    analyze_ledger,
+    build_exception_ledger,
+    build_ledger_coverage_summary,
+    build_ledger_dashboard_tables,
+    ledger_display_dataframe,
+)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,7 +37,7 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 15
+SCENARIO_PREVIEW_SCHEMA_VERSION = 16
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -258,6 +265,10 @@ if "base_file_signature" not in st.session_state: st.session_state.base_file_sig
 if "trial_balance_ready" not in st.session_state: st.session_state.trial_balance_ready = False
 if "trial_balance_signature" not in st.session_state: st.session_state.trial_balance_signature = None
 if "t001k_ready" not in st.session_state: st.session_state.t001k_ready = False
+if "ledger_ready" not in st.session_state: st.session_state.ledger_ready = False
+if "ledger_signature" not in st.session_state: st.session_state.ledger_signature = None
+if "ledger_analysis_records" not in st.session_state: st.session_state.ledger_analysis_records = []
+if "ledger_analysis_signature" not in st.session_state: st.session_state.ledger_analysis_signature = None
 if "t001k_signature" not in st.session_state: st.session_state.t001k_signature = None
 if "mm03_image_names" not in st.session_state: st.session_state.mm03_image_names = []
 if "mm03_records" not in st.session_state: st.session_state.mm03_records = []
@@ -460,6 +471,7 @@ PROJECT_TYPE_LABELS = {
     "T030": "自动过账配置 T030",
     "SKAT": "科目主数据 SKAT",
     "TrialBalance": "科目余额/发生额表",
+    "Ledger": "全量序时账/凭证明细",
     "T001K": "T001K 公司代码/评估分组",
     "Samples": "样本清单",
     "MM03": "MM03 物料主数据截图",
@@ -467,9 +479,12 @@ PROJECT_TYPE_LABELS = {
     "Unclassified": "未识别",
 }
 
-PROJECT_SPREADSHEET_TYPES = ["T030", "SKAT", "TrialBalance", "T001K", "Samples"]
+PROJECT_SPREADSHEET_TYPES = ["T030", "SKAT", "TrialBalance", "Ledger", "T001K", "Samples"]
 PROJECT_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
 PROJECT_DATA_EXTS = {".csv", ".xlsx", ".xls", ".txt"}
+TRIAL_BALANCE_NAME_HINTS = ["科余", "课余", "余额", "发生额", "余额表", "faglflext", "trial", "balance", "tb"]
+LEDGER_NAME_HINTS = ["序时账", "凭证明细", "全量凭证", "明细账", "journal", "ledger", "bseg", "bkpf", "fbl3n", "line item"]
+T030_NAME_HINTS = ["t030", "obyc", "自动过账", "过账配置", "配置表"]
 
 def project_upload_display_name(uploaded_file):
     return str(getattr(uploaded_file, "name", "") or "未命名文件").replace("\\", "/")
@@ -480,9 +495,10 @@ def project_upload_basename(uploaded_file):
 def project_filename_score(name, file_type):
     text = str(name or "").lower()
     score_map = {
-        "T030": ["t030", "obyc", "自动过账", "过账配置", "配置表"],
+        "T030": T030_NAME_HINTS,
         "SKAT": ["skat", "科目主数据", "科目表", "总账科目表"],
-        "TrialBalance": ["科余", "课余", "余额", "发生额", "余额表", "faglflext", "trial", "balance", "acdoca", "tb"],
+        "TrialBalance": TRIAL_BALANCE_NAME_HINTS + ["acdoca"],
+        "Ledger": LEDGER_NAME_HINTS,
         "T001K": ["t001k", "评估范围", "评估分组"],
         "Samples": ["sample", "samples", "样本", "fb03", "凭证", "清单", "inf"],
     }
@@ -494,14 +510,19 @@ def project_filename_score(name, file_type):
         score -= 40
     if file_type == "Samples" and any(word in text for word in ["t030", "skat", "t001k", "科余", "课余", "余额"]):
         score -= 30
+    if file_type == "Samples" and any(word in text for word in ["序时账", "全量", "凭证明细", "bseg", "bkpf", "journal", "ledger"]):
+        score -= 60
+    if file_type == "Ledger" and any(word in text for word in ["sample", "samples", "样本", "fb03", "抽样"]):
+        score -= 50
     return score
 
 def project_preferred_type_from_filename(name):
     text = str(name or "").lower()
     strong_rules = [
-        ("TrialBalance", ["科余", "课余", "余额", "发生额", "余额表", "faglflext", "acdoca", "trial", "balance"]),
+        ("Ledger", LEDGER_NAME_HINTS),
+        ("TrialBalance", TRIAL_BALANCE_NAME_HINTS + ["acdoca"]),
         ("T001K", ["t001k", "评估范围", "评估分组"]),
-        ("T030", ["t030", "obyc", "自动过账", "过账配置"]),
+        ("T030", T030_NAME_HINTS),
         ("SKAT", ["skat", "科目主数据", "总账科目表"]),
         ("Samples", ["sample", "samples", "样本", "fb03", "凭证"]),
     ]
@@ -510,7 +531,30 @@ def project_preferred_type_from_filename(name):
             return file_type
     return ""
 
+def project_candidate_block_reason(name, file_type):
+    text = str(name or "").lower()
+    has_tb_hint = any(keyword.lower() in text for keyword in TRIAL_BALANCE_NAME_HINTS)
+    has_ledger_hint = any(keyword.lower() in text for keyword in LEDGER_NAME_HINTS)
+    has_t030_hint = any(keyword.lower() in text for keyword in T030_NAME_HINTS)
+    if file_type == "T030" and (has_tb_hint or has_ledger_hint) and not has_t030_hint:
+        return "文件名明确指向科目余额/发生额或序时账，禁止按 T030 兜底识别"
+    if file_type in {"SKAT", "Samples"} and has_tb_hint:
+        return "文件名明确指向科目余额/发生额，禁止按科目主数据或样本兜底识别"
+    if file_type == "TrialBalance" and has_ledger_hint:
+        return "文件名明确指向全量序时账，禁止按余额表兜底识别"
+    return ""
+
 def project_validate_candidate(uploaded_file, file_type):
+    blocked = project_candidate_block_reason(project_upload_display_name(uploaded_file), file_type)
+    if blocked:
+        return {
+            "file_type": file_type,
+            "valid": False,
+            "message": blocked,
+            "rows": 0,
+            "columns": 0,
+            "score": -100,
+        }
     try:
         uploaded_file.seek(0)
         is_valid, msg, df = DataValidator.validate_file(uploaded_file, file_type)
@@ -614,7 +658,7 @@ def classify_project_upload(uploaded_file):
     }
 
 def clear_project_imported_data():
-    for file_type in ["T030", "SKAT", "TrialBalance", "Samples", "T001K"]:
+    for file_type in ["T030", "SKAT", "TrialBalance", "Ledger", "Samples", "T001K"]:
         path = os.path.join(SESSION_DATA_DIR, f"{file_type}.csv")
         if os.path.exists(path):
             try:
@@ -625,6 +669,10 @@ def clear_project_imported_data():
     st.session_state.base_file_signature = None
     st.session_state.trial_balance_ready = False
     st.session_state.trial_balance_signature = None
+    st.session_state.ledger_ready = False
+    st.session_state.ledger_signature = None
+    st.session_state.ledger_analysis_records = []
+    st.session_state.ledger_analysis_signature = None
     st.session_state.t001k_ready = False
     st.session_state.t001k_signature = None
     st.session_state.mm03_image_names = []
@@ -869,6 +917,17 @@ def process_project_folder_upload(project_files, selected_model):
             loaded_items.append(f"{file_count} 张余额/发生额表")
         else:
             warnings.append(f"余额/发生额表加载失败：{msg}")
+
+    ledger_files = [uploaded for _, uploaded in grouped["Ledger"]]
+    if ledger_files:
+        is_valid, msg, file_count = validate_uploads_to_session(ledger_files, "Ledger")
+        if is_valid:
+            st.session_state.ledger_ready = True
+            st.session_state.ledger_signature = ("project-folder", signature, "Ledger", file_count)
+            st.session_state.ledger_analysis_records = []
+            loaded_items.append(f"{file_count} 张全量序时账/凭证明细")
+        else:
+            warnings.append(f"全量序时账/凭证明细加载失败：{msg}")
 
     t001k_file = best_project_file(grouped["T001K"])
     if t001k_file:
@@ -1432,6 +1491,118 @@ def render_account_quantity_coverage(ranked):
         st.success("已识别出 90% 以上客户科目与当前自动分录场景的关系，可进入样本覆盖范围筛选。")
     else:
         st.warning("当前科目数量覆盖率低于 90%。可补充固定资产、税费、人工、费用分摊等场景规则，或检查客户科目描述和配置表完整性。")
+
+def current_ledger_analysis_signature():
+    return (
+        st.session_state.get("ledger_signature"),
+        st.session_state.get("scenario_preview_schema_version"),
+        tuple((row.get("name"), tuple(row.get("raw_accounts", [])), tuple(row.get("amount_accounts", []))) for row in st.session_state.get("scenario_preview", [])),
+        st.session_state.get("t001k_signature"),
+        st.session_state.get("mm03_signature"),
+        len(st.session_state.get("mm03_records", []) or []),
+    )
+
+def ensure_ledger_analysis_current(ranked):
+    if not st.session_state.get("ledger_ready"):
+        st.session_state.ledger_analysis_records = []
+        st.session_state.ledger_analysis_signature = None
+        return pd.DataFrame()
+
+    signature = current_ledger_analysis_signature()
+    if st.session_state.get("ledger_analysis_records") and st.session_state.get("ledger_analysis_signature") == signature:
+        return pd.DataFrame(st.session_state.ledger_analysis_records)
+
+    ledger_df = load_session_table("Ledger")
+    if ledger_df.empty:
+        st.session_state.ledger_analysis_records = []
+        st.session_state.ledger_analysis_signature = signature
+        return pd.DataFrame()
+
+    analysis_df = analyze_ledger(
+        ledger_df,
+        ranked,
+        load_session_table("T030"),
+        load_session_table("T001K"),
+        st.session_state.mm03_records,
+    )
+    st.session_state.ledger_analysis_records = analysis_df.to_dict("records") if not analysis_df.empty else []
+    st.session_state.ledger_analysis_signature = signature
+    return analysis_df
+
+def render_full_ledger_testing_dashboard(ranked):
+    if not st.session_state.get("ledger_ready"):
+        st.info("如需执行报告所述的全量实质性测试覆盖，请上传全量序时账/凭证明细表。当前仍可基于科目余额/发生额表进行金额影响分析。")
+        return pd.DataFrame()
+
+    with st.spinner("正在基于全量序时账执行场景归类与 T030 配置验证..."):
+        analysis_df = ensure_ledger_analysis_current(ranked)
+    if analysis_df.empty:
+        st.warning("全量序时账已加载，但未能形成可分析的凭证明细。请检查凭证号、科目、金额等字段。")
+        return analysis_df
+
+    summary = build_ledger_coverage_summary(analysis_df)
+    tables = build_ledger_dashboard_tables(analysis_df)
+    exception_df = build_exception_ledger(analysis_df)
+    display_df = ledger_display_dataframe(analysis_df)
+
+    st.markdown("### 全量自动化凭证实质性测试覆盖")
+    st.caption("基于全量序时账逐行识别自动分录场景，并结合公司代码、物料号、T001K/MM03 与 T030 配置判断是否可作为已完成实质性测试覆盖。")
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("凭证行数", f"{summary['total_lines']:,}")
+    metric_cols[1].metric("已覆盖行数", f"{summary['covered_lines']:,}")
+    metric_cols[2].metric("金额覆盖率", f"{summary['amount_coverage_pct']:.2f}%")
+    metric_cols[3].metric("科目覆盖率", f"{summary['account_coverage_pct']:.2f}%")
+    metric_cols[4].metric("异常/未覆盖行数", f"{summary['exception_lines']:,}")
+
+    if summary["amount_coverage_pct"] >= 90:
+        st.success("全量凭证明细中已有 90% 以上金额可落入自动化凭证实质性测试覆盖。")
+    else:
+        st.warning("全量凭证明细金额覆盖率低于 90%，建议优先查看异常凭证清单，补充事务字段、物料主数据或扩展场景规则。")
+
+    detail_cols = st.columns([1.15, 0.85])
+    with detail_cols[0]:
+        scenario_table = tables.get("scenario", pd.DataFrame())
+        if not scenario_table.empty:
+            st.markdown("**按场景与测试状态汇总**")
+            scenario_display = scenario_table.copy()
+            scenario_display["金额"] = scenario_display["金额"].map(lambda value: f"{float(value):,.2f}")
+            st.dataframe(scenario_display, width="stretch", hide_index=True)
+    with detail_cols[1]:
+        exception_table = tables.get("exception", pd.DataFrame())
+        if not exception_table.empty:
+            st.markdown("**未覆盖/异常原因汇总**")
+            exception_display = exception_table.copy()
+            exception_display["金额"] = exception_display["金额"].map(lambda value: f"{float(value):,.2f}")
+            st.dataframe(exception_display, width="stretch", hide_index=True)
+
+    export_cols = st.columns([1.1, 1.1, 2.8])
+    with export_cols[0]:
+        st.download_button(
+            "📥 下载异常凭证清单",
+            data=dataframe_to_excel_bytes(exception_df, "异常凭证清单"),
+            file_name="VAST_Exception_Vouchers.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+            disabled=exception_df.empty,
+        )
+    with export_cols[1]:
+        st.download_button(
+            "📥 下载全量标签序时账",
+            data=dataframe_to_excel_bytes(display_df, "全量标签序时账"),
+            file_name="VAST_Tagged_Ledger.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+            disabled=display_df.empty,
+        )
+    with export_cols[2]:
+        st.caption("异常清单包括无法匹配自动化场景、多场景候选、配置不一致和字段待补充的凭证明细，供审计团队进一步核查手工或异常凭证。")
+
+    with st.expander("预览异常凭证清单", expanded=False):
+        if exception_df.empty:
+            st.success("当前全量序时账未发现未覆盖或配置异常凭证明细。")
+        else:
+            st.dataframe(exception_df.head(200), width="stretch", hide_index=True)
+    return analysis_df
 
 def build_subscenario_rank_rows(coverage_df):
     if coverage_df.empty:
@@ -2621,7 +2792,7 @@ st.progress(st.session_state.current_step / 3.0)
 if st.session_state.current_step == 1:
     st.subheader("步骤 1: 设置审计项目背景")
     st.markdown("**一键上传项目资料文件夹（推荐）**")
-    st.caption("可直接选择项目文件夹，系统会自动识别并加载 T030、SKAT、余额/发生额表、T001K、样本清单、MM03 截图和凭证截图；后续步骤只需查看、筛选和必要时补充。")
+    st.caption("可直接选择项目文件夹，系统会自动识别并加载 T030、SKAT、全量序时账/凭证明细、余额/发生额表、T001K、样本清单、MM03 截图和凭证截图；后续步骤只需查看、筛选和必要时补充。")
     project_folder_files = st.file_uploader(
         "选择项目资料文件夹",
         type=["csv", "xlsx", "xls", "txt", "jpg", "jpeg", "png"],
@@ -2734,6 +2905,30 @@ elif st.session_state.current_step == 3:
     else:
         tb_label = "可选：科目余额/发生额表（用于补充金额分析和部分科目名称）"
     render_project_folder_status()
+    ledger_files = []
+    ledger_label = "推荐：全量序时账/凭证明细表（用于逐笔场景归类、配置验证与异常凭证清单）"
+    if st.session_state.project_folder_loaded and st.session_state.ledger_ready:
+        st.success("全量序时账/凭证明细已从第一步项目资料包自动加载。需要补充或替换时可展开下方区域。")
+        with st.expander("补充或替换全量序时账/凭证明细", expanded=False):
+            ledger_files = st.file_uploader(ledger_label, type=["csv", "xlsx", "xls", "txt"], accept_multiple_files=True)
+    else:
+        ledger_files = st.file_uploader(ledger_label, type=["csv", "xlsx", "xls", "txt"], accept_multiple_files=True)
+    if ledger_files:
+        ledger_signature = upload_signature(ledger_files)
+        if ledger_signature != st.session_state.ledger_signature:
+            with st.spinner("正在校验全量序时账并准备自动化凭证测试覆盖分析..."):
+                is_v, msg, file_count = validate_uploads_to_session(ledger_files, "Ledger")
+                if is_v:
+                    st.session_state.ledger_ready = True
+                    st.session_state.ledger_signature = ledger_signature
+                    st.session_state.ledger_analysis_records = []
+                    st.session_state.ledger_analysis_signature = None
+                    st.success(f"已加载并合并 {file_count} 张全量序时账/凭证明细。")
+                else:
+                    st.error(f"❌ Ledger 失败: {msg}")
+    elif st.session_state.ledger_ready:
+        st.success("已加载本会话的全量序时账/凭证明细。")
+
     tb_files = []
     if st.session_state.project_folder_loaded and st.session_state.trial_balance_ready:
         st.success("余额/发生额表已从第一步项目资料包自动加载。需要补充或替换时可展开下方区域。")
@@ -2759,6 +2954,7 @@ elif st.session_state.current_step == 3:
         st.info("可以先跳过金额表，直接上传样本或凭证截图生成底稿；审计影响金额将在上传金额表后显示。")
 
     ensure_scenario_preview_current()
+    render_full_ledger_testing_dashboard(st.session_state.scenario_preview)
     render_account_quantity_coverage(st.session_state.scenario_preview)
     render_general_audit_dashboard(st.session_state.scenario_preview)
 
@@ -3018,11 +3214,14 @@ elif st.session_state.current_step == 3:
         if st.button("返回上一步", width="stretch"): go_to_step(2)
     with nav_cols[2]:
         final_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
-        btn_disabled = not final_sample_records
+        has_ledger_analysis = bool(st.session_state.get("ledger_analysis_records"))
+        btn_disabled = not final_sample_records and not has_ledger_analysis
         if st.session_state.ocr_busy and final_sample_records:
             st.caption("OCR 仍在处理补充截图；当前已有样本记录，可先生成底稿。")
+        elif not final_sample_records and has_ledger_analysis:
+            st.caption("已存在全量序时账分析，可先生成覆盖总览和异常凭证清单；样本凭证可后续补充生成 D&I 描述。")
         elif not final_sample_records:
-            st.caption("请先上传样本清单，或解析凭证截图生成样本记录。")
+            st.caption("请先上传样本清单、解析凭证截图，或上传全量序时账/凭证明细。")
         if st.button("🚀 生成最终底稿", width="stretch", disabled=btn_disabled):
             with st.spinner("AI 正在撰写穿行测试描述..."):
                 c1 = Core1Orchestrator(SESSION_DATA_DIR); ranked = c1.run()
@@ -3079,6 +3278,11 @@ elif st.session_state.current_step == 3:
                 
                 audit_context = dict(st.session_state.audit_context)
                 audit_context["voucher_validation"] = st.session_state.voucher_validation_records
+                ledger_analysis_df = ensure_ledger_analysis_current(ranked)
+                if not ledger_analysis_df.empty:
+                    audit_context["full_ledger_summary"] = build_ledger_coverage_summary(ledger_analysis_df)
+                    audit_context["full_ledger_exceptions"] = build_exception_ledger(ledger_analysis_df).to_dict("records")
+                    audit_context["full_ledger_tagged"] = ledger_display_dataframe(ledger_analysis_df).to_dict("records")
                 di = c2.generate_di_descriptions(ranked, audit_context)
                 
                 if not di:

@@ -114,6 +114,22 @@ def test_t030_maps_valuation_group_and_class(tmp_path):
     assert df.iloc[0]["BKLAS"] == "7900"
 
 
+def test_balance_like_file_does_not_validate_as_t030(tmp_path):
+    balance_path = tmp_path / "trial_balance.csv"
+    balance_path.write_text(
+        "\n".join([
+            "Company Code,G/L Account,Short Text,Currency,Department,Opening Balance,Prior Balance,Debit Amount,Credit Amount,Closing Balance",
+            "4000,1403000000,Raw material,CNY,INV,0,0,100,0,100",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, _ = DataValidator.validate_file(MockUpload(balance_path), "T030")
+
+    assert not ok
+    assert "KTOSL" in msg
+
+
 def test_t030_sap_text_export_preserves_empty_tab_columns(tmp_path):
     t030_path = tmp_path / "t030.xls"
     t030_path.write_text(
@@ -296,3 +312,20 @@ def test_data_validator_maps_german_headers_for_samples_t030_and_t001k(tmp_path)
     assert ok, msg
     assert df.iloc[0]["BUKRS"] == "4000"
     assert df.iloc[0]["BWMOD"] == "4110"
+
+
+def test_ledger_maps_full_journal_headers(tmp_path):
+    ledger_path = tmp_path / "ledger.csv"
+    ledger_path.write_text(
+        "Company Code,Document Number,Posting Date,G/L Account,Material,Plant,Amount,S/H,TRS,AM\n"
+        "4000,900001,2026-01-31,2202030100,MAT-1,4110,100,H,WRX,\n",
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(ledger_path), "Ledger")
+
+    assert ok, msg
+    assert {"COMPANY_CODE", "DOC_NUM", "SAKNR", "MATNR", "WERKS", "AMOUNT", "SHKZG", "KTOSL", "KOMOK"}.issubset(df.columns)
+    assert df.iloc[0]["COMPANY_CODE"] == "4000"
+    assert df.iloc[0]["DOC_NUM"] == "900001"
+    assert df.iloc[0]["WERKS"] == "4110"
