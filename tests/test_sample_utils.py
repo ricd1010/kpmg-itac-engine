@@ -7,9 +7,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from sample_utils import (
+    build_sample_voucher_index,
     enrich_samples_with_account_descriptions,
+    is_duplicate_voucher_sample,
     load_account_description_map,
     prepare_sample_editor_dataframe,
+    remove_duplicate_ocr_samples,
 )
 
 
@@ -73,3 +76,48 @@ def test_prepare_sample_editor_dataframe_stringifies_editable_values():
     assert prepared.loc[0, "MATNR"] == "10000000"
     assert prepared.loc[1, "SCENARIO"] == ""
     assert all(dtype == "object" for dtype in prepared.dtypes.astype(str))
+
+
+def test_voucher_index_treats_same_excel_and_ocr_voucher_as_duplicate():
+    table_records = [
+        {"DOC_NUM": "6000004976", "COMPANY_CODE": "4020", "SAKNR": "1405020000"},
+        {"DOC_NUM": "6000004976", "COMPANY_CODE": "4020", "SAKNR": "2202040000"},
+    ]
+    voucher_index = build_sample_voucher_index(table_records)
+
+    assert is_duplicate_voucher_sample(
+        {"DOC_NUM": "6000004976", "COMPANY_CODE": "4020", "SAKNR": "1405050100"},
+        voucher_index,
+    )
+    assert not is_duplicate_voucher_sample(
+        {"DOC_NUM": "6000004976", "COMPANY_CODE": "4300", "SAKNR": "1405050100"},
+        voucher_index,
+    )
+
+
+def test_voucher_duplicate_check_falls_back_to_document_when_company_missing():
+    voucher_index = build_sample_voucher_index([
+        {"DOC_NUM": 8178095898.0, "COMPANY_CODE": "", "SAKNR": "6401000000"}
+    ])
+
+    assert is_duplicate_voucher_sample(
+        {"DOC_NUM": "8178095898", "COMPANY_CODE": "4110", "SAKNR": "1405010000"},
+        voucher_index,
+    )
+
+
+def test_remove_duplicate_ocr_samples_keeps_excel_multiline_voucher_primary():
+    table_records = [
+        {"DOC_NUM": "6000004976", "COMPANY_CODE": "4020", "SAKNR": "1405020000"},
+        {"DOC_NUM": "6000004976", "COMPANY_CODE": "4020", "SAKNR": "2202040000"},
+    ]
+    ocr_records = [
+        {"DOC_NUM": "6000004976", "COMPANY_CODE": "4020", "SAKNR": "1405020000"},
+        {"DOC_NUM": "7000000001", "COMPANY_CODE": "4020", "SAKNR": "6401000000"},
+    ]
+
+    kept, removed = remove_duplicate_ocr_samples(table_records, ocr_records)
+
+    assert len(table_records) == 2
+    assert [row["DOC_NUM"] for row in kept] == ["7000000001"]
+    assert [row["DOC_NUM"] for row in removed] == ["6000004976"]

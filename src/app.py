@@ -17,7 +17,13 @@ from report_generator_general import GeneralAuditReportGenerator as ReportGenera
 from data_validator import DataValidator
 from scenario_summary import amount_for_direction, build_scenario_account_totals
 from sampling_scenario import build_sampling_scenario_table
-from sample_utils import enrich_samples_with_account_descriptions, load_account_description_map
+from sample_utils import (
+    build_sample_voucher_index,
+    enrich_samples_with_account_descriptions,
+    is_duplicate_voucher_sample,
+    load_account_description_map,
+    remove_duplicate_ocr_samples,
+)
 from mm03_parser import mm03_records_to_dataframe_rows, parse_mm03_ocr_text
 from voucher_validation import validate_voucher_t030_logic
 from ledger_analysis import (
@@ -38,7 +44,7 @@ KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
 SCENARIO_PREVIEW_SCHEMA_VERSION = 16
-PROJECT_CLASSIFIER_VERSION = "2026-07-01-trial-balance-guard-v6"
+PROJECT_CLASSIFIER_VERSION = "2026-07-02-sample-voucher-dedupe-v1"
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -255,6 +261,7 @@ if "ocr_samples_editor_nonce" not in st.session_state: st.session_state.ocr_samp
 if "sample_table_records" not in st.session_state: st.session_state.sample_table_records = []
 if "sample_table_signature" not in st.session_state: st.session_state.sample_table_signature = None
 if "sample_source_scenarios" not in st.session_state: st.session_state.sample_source_scenarios = {}
+if "sample_dedupe_notice" not in st.session_state: st.session_state.sample_dedupe_notice = ""
 if "processed_image_names" not in st.session_state: st.session_state.processed_image_names = set()
 if "results" not in st.session_state: st.session_state.results = None
 if "api_key_valid" not in st.session_state: st.session_state.api_key_valid = False
@@ -712,6 +719,7 @@ def clear_project_imported_data():
     st.session_state.sample_table_records = []
     st.session_state.sample_table_signature = None
     st.session_state.ocr_samples = []
+    st.session_state.sample_dedupe_notice = ""
     st.session_state.processed_image_names = set()
     st.session_state.sample_source_scenarios = {}
     st.session_state.audit_coverage_selected_keys = set()
@@ -835,6 +843,8 @@ def process_voucher_image_sources(image_sources, selected_model):
         f"{s.get('SOURCE_FILE')}_{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}"
         for s in st.session_state.ocr_samples
     }
+    table_voucher_index = build_sample_voucher_index(st.session_state.sample_table_records)
+    skipped_duplicate_rows = 0
     for source in image_sources:
         source_file = source.get("source_file", "")
         try:
@@ -856,6 +866,9 @@ def process_voucher_image_sources(image_sources, selected_model):
             )
             parsed_items = apply_scenario_to_records(parsed_items, AUTO_SCENARIO_LABEL, st.session_state.scenario_preview)
             for item in parsed_items:
+                if is_duplicate_voucher_sample(item, table_voucher_index):
+                    skipped_duplicate_rows += 1
+                    continue
                 item_id = f"{item.get('SOURCE_FILE')}_{item.get('DOC_NUM')}_{item.get('SAKNR')}_{item.get('AMOUNT')}_{item.get('DATE')}"
                 if item_id not in existing_ids:
                     st.session_state.ocr_samples.append(item)
@@ -865,6 +878,11 @@ def process_voucher_image_sources(image_sources, selected_model):
                 st.session_state.processed_image_names.add(source_file)
         except Exception as exc:
             errors.append(f"{source_file}: {exc}")
+    if skipped_duplicate_rows:
+        st.session_state.sample_dedupe_notice = (
+            f"已识别到 {skipped_duplicate_rows} 行凭证截图 OCR 与样本清单凭证号重复；"
+            "系统保留样本清单作为主样本来源，截图不再重复纳入样本范围。"
+        )
     return added, errors
 
 def process_pending_project_voucher_images(selected_model):
@@ -877,8 +895,9 @@ def process_pending_project_voucher_images(selected_model):
         for source in (st.session_state.get("project_pending_voucher_sources") or [])
     ]
     added, errors = process_voucher_image_sources(sources, selected_model)
-    if added:
+    if added or not errors:
         st.session_state.project_pending_voucher_sources = []
+    if added:
         st.session_state.ocr_samples_editor_nonce += 1
     return added, errors
 
@@ -974,6 +993,15 @@ def process_project_folder_upload(project_files, selected_model):
             warnings.extend(sample_errors)
         if table_records:
             st.session_state.sample_table_records = table_records
+            st.session_state.ocr_samples, removed_ocr_samples = remove_duplicate_ocr_samples(
+                st.session_state.sample_table_records,
+                st.session_state.ocr_samples,
+            )
+            if removed_ocr_samples:
+                st.session_state.sample_dedupe_notice = (
+                    f"已识别到 {len(removed_ocr_samples)} 行凭证截图 OCR 与样本清单凭证号重复；"
+                    "系统保留样本清单作为主样本来源，截图不再重复纳入样本范围。"
+                )
             st.session_state.sample_table_signature = ("project-folder", signature, "Samples", len(sample_files))
             st.session_state.ocr_samples_editor_nonce += 1
             loaded_items.append(f"{len(sample_files)} 个样本清单文件 / {len(table_records)} 行")
@@ -3156,6 +3184,15 @@ elif st.session_state.current_step == 3:
                 st.error("；".join(errors))
             else:
                 st.session_state.sample_table_records = table_records
+                st.session_state.ocr_samples, removed_ocr_samples = remove_duplicate_ocr_samples(
+                    st.session_state.sample_table_records,
+                    st.session_state.ocr_samples,
+                )
+                if removed_ocr_samples:
+                    st.session_state.sample_dedupe_notice = (
+                        f"已识别到 {len(removed_ocr_samples)} 行凭证截图 OCR 与样本清单凭证号重复；"
+                        "系统保留样本清单作为主样本来源，截图不再重复纳入样本范围。"
+                    )
                 st.session_state.sample_table_signature = samples_signature
                 st.session_state.ocr_samples_editor_nonce += 1
                 st.success(f"已加载 {len(samples_files)} 个样本清单文件，共 {len(table_records)} 行样本。")
@@ -3172,6 +3209,8 @@ elif st.session_state.current_step == 3:
                     st.session_state.ocr_engine_inst = OCRProcessor()
             st.session_state.ocr_busy = True
             try:
+                table_voucher_index = build_sample_voucher_index(st.session_state.sample_table_records)
+                skipped_duplicate_rows = 0
                 for img in new_imgs:
                     with st.status(f"🚀 解析: {img.name}...") as status:
                         img_bytes = img.getvalue()
@@ -3191,14 +3230,24 @@ elif st.session_state.current_step == 3:
                             parsed_items = normalize_sample_preview_records(parsed_items, source_type="凭证截图", source_file=img.name)
                             parsed_items = apply_source_scenarios(parsed_items, st.session_state.sample_source_scenarios)
                             for it in parsed_items:
+                                if is_duplicate_voucher_sample(it, table_voucher_index):
+                                    skipped_duplicate_rows += 1
+                                    continue
                                 item_id = f"{it.get('SOURCE_FILE')}_{it.get('DOC_NUM')}_{it.get('SAKNR')}_{it.get('AMOUNT')}_{it.get('DATE')}"
                                 if item_id not in [f"{s.get('SOURCE_FILE')}_{s.get('DOC_NUM')}_{s.get('SAKNR')}_{s.get('AMOUNT')}_{s.get('DATE')}" for s in st.session_state.ocr_samples]:
                                     st.session_state.ocr_samples.append(it)
                             st.session_state.processed_image_names.add(img.name)
                         status.update(label=f"✅ {img.name} 完成", state="complete")
+                if skipped_duplicate_rows:
+                    st.session_state.sample_dedupe_notice = (
+                        f"已识别到 {skipped_duplicate_rows} 行凭证截图 OCR 与样本清单凭证号重复；"
+                        "系统保留样本清单作为主样本来源，截图不再重复纳入样本范围。"
+                    )
             finally:
                 st.session_state.ocr_busy = False
                 st.rerun() # Refresh to enable button
+    if st.session_state.get("sample_dedupe_notice"):
+        st.info(st.session_state.sample_dedupe_notice)
     combined_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
     if combined_sample_records:
         render_sample_source_scenario_controls(combined_sample_records, sample_scenario_options)

@@ -76,6 +76,68 @@ def enrich_samples_with_account_descriptions(samples, descriptions):
     return enriched
 
 
+def _sample_key_value(value):
+    if pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return ""
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    return text.replace(" ", "")
+
+
+def sample_voucher_document(record):
+    return _sample_key_value((record or {}).get("DOC_NUM"))
+
+
+def sample_voucher_company(record):
+    return _sample_key_value((record or {}).get("COMPANY_CODE"))
+
+
+def build_sample_voucher_index(records):
+    """Index structured sample rows by voucher number and optional company code."""
+    index = {}
+    for record in records or []:
+        doc_num = sample_voucher_document(record)
+        if not doc_num:
+            continue
+        index.setdefault(doc_num, set()).add(sample_voucher_company(record))
+    return index
+
+
+def is_duplicate_voucher_sample(record, voucher_index):
+    """Return True when an OCR row is already represented by a sample table row.
+
+    The match is intentionally voucher-level instead of line-level: if a folder
+    contains both the sample Excel and a screenshot for the same voucher, the
+    Excel remains the primary structured sample source and OCR rows are treated
+    as supporting evidence rather than extra samples.
+    """
+    doc_num = sample_voucher_document(record)
+    if not doc_num or doc_num not in (voucher_index or {}):
+        return False
+    company = sample_voucher_company(record)
+    indexed_companies = voucher_index.get(doc_num) or set()
+    if not company:
+        return True
+    return company in indexed_companies or "" in indexed_companies
+
+
+def remove_duplicate_ocr_samples(table_records, ocr_records):
+    voucher_index = build_sample_voucher_index(table_records)
+    kept = []
+    removed = []
+    for record in ocr_records or []:
+        if is_duplicate_voucher_sample(record, voucher_index):
+            removed.append(record)
+        else:
+            kept.append(record)
+    return kept, removed
+
+
 def _editor_text_value(value):
     if pd.isna(value):
         return ""

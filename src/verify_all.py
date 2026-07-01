@@ -46,10 +46,17 @@ def verify_all():
     try:
         wb = openpyxl.load_workbook(report_path)
         print(f"    成功加载 Excel，包含分页: {wb.sheetnames}")
-        if "审计总览" not in wb.sheetnames:
-            raise Exception("缺失 '审计总览' 分页")
-        if "方法论与较佳实践 (WGLL)" not in wb.sheetnames:
-            raise Exception("缺失 'WGLL' 分页")
+        required_sheets = [
+            "审计摘要",
+            "T030&SKAT 科目配置",
+            "T001K_MM03 评估信息",
+            "样本凭证明细",
+            "Information",
+            "异常_待补充清单",
+        ]
+        for sheet_name in required_sheets:
+            if sheet_name not in wb.sheetnames:
+                raise Exception(f"缺失 '{sheet_name}' 分页")
         print("    Excel 文件结构校验通过")
     except Exception as e:
         raise Exception(f"Excel 文件损坏或无法打开: {str(e)}")
