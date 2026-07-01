@@ -101,6 +101,9 @@ class DataValidator:
             # --- 阶段 6：列名映射 ---
             df.columns = [str(c).strip() for c in df.columns]
             df = DataValidator._map_columns(df, file_type)
+
+            if file_type == "SKAT" and DataValidator._looks_like_trial_balance(df):
+                return False, "SKAT 表识别失败：检测到公司代码、余额或发生额字段，疑似科目余额/发生额表。", None
             
             # T030 专项补丁
             if file_type == "T030":
@@ -152,6 +155,25 @@ class DataValidator:
             return True, "验证通过", df
         except Exception as e:
             return False, f"验证器异常: {str(e)}", None
+
+    @staticmethod
+    def _looks_like_trial_balance(df):
+        columns = {str(col).strip().upper() for col in df.columns}
+        if {"COMPANY_CODE", "DMBTR_DEBIT"}.issubset(columns):
+            return True
+        if {"DMBTR_DEBIT", "DMBTR_CREDIT"}.issubset(columns):
+            return True
+        header_text = " ".join(str(col).strip().lower() for col in df.columns)
+        balance_tokens = [
+            "余额",
+            "发生额",
+            "debit amount",
+            "credit amount",
+            "opening balance",
+            "closing balance",
+            "trial balance",
+        ]
+        return any(token in header_text for token in balance_tokens)
 
     @staticmethod
     def _drop_export_artifacts(df, file_type):

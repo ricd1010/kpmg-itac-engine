@@ -130,6 +130,22 @@ def test_balance_like_file_does_not_validate_as_t030(tmp_path):
     assert "KTOSL" in msg
 
 
+def test_balance_like_file_does_not_validate_as_skat(tmp_path):
+    balance_path = tmp_path / "trial_balance.csv"
+    balance_path.write_text(
+        "\n".join([
+            "Company Code,G/L Account,Short Text,Currency,Department,Opening Balance,Prior Balance,Debit Amount,Credit Amount,Closing Balance",
+            "4000,1403000000,Raw material,CNY,INV,0,0,100,0,100",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, _ = DataValidator.validate_file(MockUpload(balance_path), "SKAT")
+
+    assert not ok
+    assert "SKAT" in msg
+
+
 def test_t030_sap_text_export_preserves_empty_tab_columns(tmp_path):
     t030_path = tmp_path / "t030.xls"
     t030_path.write_text(

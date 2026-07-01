@@ -38,7 +38,7 @@ KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
 SCENARIO_PREVIEW_SCHEMA_VERSION = 16
-PROJECT_CLASSIFIER_VERSION = "2026-07-01-trial-balance-guard-v4"
+PROJECT_CLASSIFIER_VERSION = "2026-07-01-trial-balance-guard-v5"
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -2747,6 +2747,7 @@ header_html = f"""
     <div style="text-align: right; color: white;">
         <div style="font-size: 14px; font-weight: 600; letter-spacing: 1px;">SYSTEM ONLINE</div>
         <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">Session Tracking: {st.session_state.session_id[:12].upper()}</div>
+        <div style="font-size: 10px; opacity: 0.65; margin-top: 4px;">Classifier {PROJECT_CLASSIFIER_VERSION}</div>
     </div>
 </div>
 """
