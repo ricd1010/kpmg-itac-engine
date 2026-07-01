@@ -417,6 +417,28 @@ def load_session_table(file_type):
     except Exception:
         return pd.DataFrame()
 
+def session_table_exists(file_type):
+    path = os.path.join(SESSION_DATA_DIR, f"{file_type}.csv")
+    return os.path.exists(path) and os.path.getsize(path) > 0
+
+def recover_loaded_session_state():
+    if session_table_exists("T030") and session_table_exists("SKAT"):
+        st.session_state.base_files_ready = True
+        if st.session_state.base_file_signature is None:
+            st.session_state.base_file_signature = ("session-cache", "T030", "SKAT")
+    if session_table_exists("TrialBalance"):
+        st.session_state.trial_balance_ready = True
+        if st.session_state.trial_balance_signature is None:
+            st.session_state.trial_balance_signature = ("session-cache", "TrialBalance")
+    if session_table_exists("Ledger"):
+        st.session_state.ledger_ready = True
+        if st.session_state.ledger_signature is None:
+            st.session_state.ledger_signature = ("session-cache", "Ledger")
+    if session_table_exists("T001K"):
+        st.session_state.t001k_ready = True
+        if st.session_state.t001k_signature is None:
+            st.session_state.t001k_signature = ("session-cache", "T001K")
+
 def dataframe_to_excel_bytes(df, sheet_name="Sheet1"):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -2706,6 +2728,8 @@ def render_scenario_preview(ranked, show_amount=False):
     if total_accounts and matched_accounts == 0:
         st.warning("当前 T030 场景科目没有在 SKAT 中找到对应名称；请确认上传的是完整 SKAT，或在下一步上传余额表补充科目名称。")
 
+recover_loaded_session_state()
+
 # Main Header Area with Logo
 logo_path = os.path.join(os.path.dirname(__file__), "kpmg_logo_official_white.png")
 # Note: Since sidebar is removed, we'll use a blue header bar or just the logo
@@ -2850,8 +2874,8 @@ elif st.session_state.current_step == 2:
     render_project_folder_status()
     t030_file = None
     skat_file = None
-    if st.session_state.project_folder_loaded and st.session_state.base_files_ready:
-        st.success("T030/SKAT 已从第一步项目资料包自动加载。需要替换时可展开下方区域重新上传。")
+    if st.session_state.base_files_ready:
+        st.success("T030/SKAT 已加载。需要替换时可展开下方区域重新上传。")
         with st.expander("替换自动过账配置与科目主数据", expanded=False):
             u1, u2 = st.columns(2)
             with u1: t030_file = st.file_uploader("自动过账配置（T030）", type=["csv", "xlsx", "xls"])
@@ -2919,8 +2943,8 @@ elif st.session_state.current_step == 3:
     render_project_folder_status()
     ledger_files = []
     ledger_label = "推荐：全量序时账/凭证明细表（用于逐笔场景归类、配置验证与异常凭证清单）"
-    if st.session_state.project_folder_loaded and st.session_state.ledger_ready:
-        st.success("全量序时账/凭证明细已从第一步项目资料包自动加载。需要补充或替换时可展开下方区域。")
+    if st.session_state.ledger_ready:
+        st.success("全量序时账/凭证明细已加载。需要补充或替换时可展开下方区域。")
         with st.expander("补充或替换全量序时账/凭证明细", expanded=False):
             ledger_files = st.file_uploader(ledger_label, type=["csv", "xlsx", "xls", "txt"], accept_multiple_files=True)
     else:
@@ -2942,8 +2966,8 @@ elif st.session_state.current_step == 3:
         st.success("已加载本会话的全量序时账/凭证明细。")
 
     tb_files = []
-    if st.session_state.project_folder_loaded and st.session_state.trial_balance_ready:
-        st.success("余额/发生额表已从第一步项目资料包自动加载。需要补充或替换时可展开下方区域。")
+    if st.session_state.trial_balance_ready:
+        st.success("余额/发生额表已加载。需要补充或替换时可展开下方区域。")
         with st.expander("补充或替换余额/发生额表", expanded=False):
             tb_files = st.file_uploader(tb_label, type=["csv", "xlsx", "xls"], accept_multiple_files=True)
     else:
