@@ -38,6 +38,7 @@ KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
 SCENARIO_PREVIEW_SCHEMA_VERSION = 16
+PROJECT_CLASSIFIER_VERSION = "2026-07-01-trial-balance-guard-v2"
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -872,7 +873,8 @@ def process_project_folder_upload(project_files, selected_model):
     if not files:
         return {"loaded": False, "loaded_items": [], "warnings": ["未选择项目资料文件夹。"]}
 
-    signature = upload_signature(files)
+    raw_signature = upload_signature(files)
+    signature = (PROJECT_CLASSIFIER_VERSION, raw_signature)
     if st.session_state.project_folder_loaded and signature == st.session_state.project_folder_signature:
         return st.session_state.project_folder_summary
 
@@ -970,6 +972,7 @@ def process_project_folder_upload(project_files, selected_model):
 
     summary = {
         "loaded": True,
+        "classifier_version": PROJECT_CLASSIFIER_VERSION,
         "loaded_items": loaded_items,
         "warnings": warnings,
         "file_count": len(files),
@@ -986,10 +989,15 @@ def render_project_folder_status():
     if not manifest and not summary:
         return
 
+    if summary and summary.get("classifier_version") != PROJECT_CLASSIFIER_VERSION:
+        st.warning("项目资料包识别规则已更新，请返回步骤 1 重新选择项目资料文件夹并点击下一步，以刷新自动识别结果。")
+        return
+
     loaded_items = summary.get("loaded_items") or []
     warnings = summary.get("warnings") or []
     if loaded_items:
         st.success("项目资料包已自动加载：" + "、".join(loaded_items))
+        st.caption(f"自动识别器版本：{PROJECT_CLASSIFIER_VERSION}")
     if warnings:
         st.warning("；".join(warnings[:6]))
     if manifest:
