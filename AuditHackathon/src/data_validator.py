@@ -144,13 +144,32 @@ class DataValidator:
                     new_col_names.append(c_str)
             df.columns = new_col_names
 
-            for i in range(df.shape[1]):
-                col_name = df.columns[i]
-                if any(k in col_name for k in ["SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC", "BWKEY", "BUKRS", "COMPANY_CODE", "BWMOD", "BKLAS", "MATNR", "WERKS"]):
-                    df.iloc[:, i] = df.iloc[:, i].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-                if any(k in col_name for k in ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]):
-                    s = df.iloc[:, i].astype(str).str.replace(r'[^0-9.\-]', '', regex=True)
-                    df.iloc[:, i] = pd.to_numeric(s, errors='coerce').fillna(0.0)
+            text_columns = [
+                "SAKNR", "DOC_NUM", "KONTS", "KONTH", "DEBIT_ACC", "CREDIT_ACC",
+                "BWKEY", "BUKRS", "COMPANY_CODE", "BWMOD", "BKLAS", "MATNR", "WERKS",
+                "PERIOD",
+            ]
+            amount_columns = ["DMBTR_DEBIT", "DMBTR_CREDIT", "AMOUNT"]
+            for col_name in list(df.columns):
+                col_key = str(col_name)
+                if any(k in col_key for k in text_columns):
+                    df[col_name] = (
+                        df[col_name]
+                        .astype(str)
+                        .str.strip()
+                        .str.replace(r'\.0$', '', regex=True)
+                    )
+                if any(k in col_key for k in amount_columns):
+                    s = (
+                        df[col_name]
+                        .astype(str)
+                        .str.strip()
+                        .str.replace(",", "", regex=False)
+                        .str.replace(r'^\((.*)\)$', r'-\1', regex=True)
+                        .str.replace(r'^(.+)-$', r'-\1', regex=True)
+                        .str.replace(r'[^0-9.\-]', '', regex=True)
+                    )
+                    df[col_name] = pd.to_numeric(s, errors='coerce').fillna(0.0).astype(float)
 
             return True, "验证通过", df
         except Exception as e:
@@ -334,11 +353,13 @@ class DataValidator:
                 "SAKNR": ["saknr", "科目编码", "科目代码", "总账科目", "总帐科目", "G/L Account", "科目", "sachkonto", "hauptbuchkonto"],
                 "TXT50": ["txt50", "科目名称", "科目描述", "短文本", "总分类帐名称", "kurztext", "bezeichnung"],
                 "DMBTR_DEBIT": [
-                    "dmbtr_debit", "本月借方发生额", "借方发生额", "借方金额",
+                    "dmbtr_debit", "debit amount", "period debit", "monthly debit",
+                    "本月借方发生额", "借方发生额", "借方金额",
                     "本年借方累计", "借方累计", "累计借方", "在制表期间的借方余额"
                 ],
                 "DMBTR_CREDIT": [
-                    "dmbtr_credit", "本月贷方发生额", "贷方发生额", "贷方金额",
+                    "dmbtr_credit", "credit amount", "period credit", "monthly credit",
+                    "本月贷方发生额", "贷方发生额", "贷方金额",
                     "本年贷方累计", "贷方累计", "累计贷方", "报表期间的贷方余额"
                 ],
             }
