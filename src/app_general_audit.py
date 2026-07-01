@@ -38,7 +38,7 @@ KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
 SCENARIO_PREVIEW_SCHEMA_VERSION = 16
-PROJECT_CLASSIFIER_VERSION = "2026-07-01-trial-balance-guard-v3"
+PROJECT_CLASSIFIER_VERSION = "2026-07-01-trial-balance-guard-v4"
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 
@@ -646,8 +646,12 @@ def classify_project_upload(uploaded_file):
             "size": size,
         }
 
-    preferred_candidates = [item for item in valid_candidates if item["file_type"] == preferred_type]
-    chosen = max(preferred_candidates or valid_candidates, key=lambda item: (item["score"], item["rows"], item["columns"]))
+    valid_by_type = {item["file_type"]: item for item in valid_candidates}
+    if "TrialBalance" in valid_by_type and preferred_type in {"", "TrialBalance"}:
+        chosen = valid_by_type["TrialBalance"]
+    else:
+        preferred_candidates = [item for item in valid_candidates if item["file_type"] == preferred_type]
+        chosen = max(preferred_candidates or valid_candidates, key=lambda item: (item["score"], item["rows"], item["columns"]))
     return {
         "文件": display_name,
         "识别类型": PROJECT_TYPE_LABELS[chosen["file_type"]],
