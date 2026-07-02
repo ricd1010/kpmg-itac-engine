@@ -62,7 +62,7 @@ def test_classify_ledger_scenarios_uses_account_and_transaction_rule():
     result = classify_ledger_scenarios(ledger, _ranked())
 
     assert result.iloc[0]["SCENARIO"] == "采购收货"
-    assert result.iloc[0]["SCENARIO_MATCH_STATUS"] == "已匹配自动化场景"
+    assert result.iloc[0]["SCENARIO_MATCH_STATUS"] == "自动化场景已匹配"
 
 
 def test_analyze_ledger_marks_passed_lines_as_substantive_tested():
@@ -80,7 +80,7 @@ def test_analyze_ledger_marks_passed_lines_as_substantive_tested():
 
     result = analyze_ledger(ledger, _ranked(), _t030(), t001k, mm03)
 
-    assert result.iloc[0]["CONFIG_VALIDATION_STATUS"] == "通过"
+    assert result.iloc[0]["CONFIG_VALIDATION_STATUS"] == "配置逻辑通过"
     assert result.iloc[0]["SUBSTANTIVE_TEST_STATUS"] == "已完成实质性测试"
     summary = build_ledger_coverage_summary(result)
     assert summary["covered_lines"] == 1

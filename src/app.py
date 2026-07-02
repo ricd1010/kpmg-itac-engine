@@ -43,10 +43,13 @@ KPMG_BLUE = "#00338D"
 KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
-SCENARIO_PREVIEW_SCHEMA_VERSION = 16
-PROJECT_CLASSIFIER_VERSION = "2026-07-02-sample-voucher-dedupe-v1"
+SCENARIO_PREVIEW_SCHEMA_VERSION = 17
+PROJECT_CLASSIFIER_VERSION = "2026-07-02-vast-sap-marc-v1"
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
+PRODUCT_NAME = "智审 V.A.S.T. 自动化凭证审计看板"
+PRODUCT_SUBTITLE = "面向 SAP 财务审计与 IT 审计的自动化凭证全量实质性测试工具"
+PRODUCT_TAGLINE = "把 SAP 自动化凭证的业务场景识别、配置逻辑验证、异常凭证筛查和审计底稿生成串联为可复核的证据链。"
 
 # Generate custom KPMG Favicon
 fav_svg = f"""
@@ -58,8 +61,8 @@ fav_svg = f"""
 fav_b64 = base64.b64encode(fav_svg.encode()).decode()
 
 st.set_page_config(
-    page_title="TSDA 测试范围框定辅助驾驶舱",
-    page_icon="🎯",
+    page_title=PRODUCT_NAME,
+    page_icon="📊",
     layout="wide",
 )
 
@@ -273,6 +276,8 @@ if "base_file_signature" not in st.session_state: st.session_state.base_file_sig
 if "trial_balance_ready" not in st.session_state: st.session_state.trial_balance_ready = False
 if "trial_balance_signature" not in st.session_state: st.session_state.trial_balance_signature = None
 if "t001k_ready" not in st.session_state: st.session_state.t001k_ready = False
+if "marc_ready" not in st.session_state: st.session_state.marc_ready = False
+if "marc_signature" not in st.session_state: st.session_state.marc_signature = None
 if "ledger_ready" not in st.session_state: st.session_state.ledger_ready = False
 if "ledger_signature" not in st.session_state: st.session_state.ledger_signature = None
 if "ledger_analysis_records" not in st.session_state: st.session_state.ledger_analysis_records = []
@@ -298,7 +303,7 @@ if "project_auto_voucher_attempted" not in st.session_state: st.session_state.pr
 if "voucher_validation_records" not in st.session_state: st.session_state.voucher_validation_records = []
 
 def current_system_version():
-    return st.session_state.audit_context.get("system_version") or st.session_state.audit_context.get("system_name") or "SAP S/4 HANA"
+    return st.session_state.audit_context.get("system_version") or st.session_state.audit_context.get("system_name") or "SAP ECC"
 
 def is_s4_system():
     return "S/4" in current_system_version()
@@ -445,6 +450,10 @@ def recover_loaded_session_state():
         st.session_state.t001k_ready = True
         if st.session_state.t001k_signature is None:
             st.session_state.t001k_signature = ("session-cache", "T001K")
+    if session_table_exists("MARC"):
+        st.session_state.marc_ready = True
+        if st.session_state.marc_signature is None:
+            st.session_state.marc_signature = ("session-cache", "MARC")
 
 def dataframe_to_excel_bytes(df, sheet_name="Sheet1"):
     output = io.BytesIO()
@@ -503,18 +512,20 @@ PROJECT_TYPE_LABELS = {
     "TrialBalance": "科目余额/发生额表",
     "Ledger": "全量序时账/凭证明细",
     "T001K": "T001K 公司代码/评估分组",
+    "MARC": "MARC 物料主数据",
     "Samples": "样本清单",
     "MM03": "MM03 物料主数据截图",
     "VoucherImage": "凭证截图",
     "Unclassified": "未识别",
 }
 
-PROJECT_SPREADSHEET_TYPES = ["T030", "SKAT", "TrialBalance", "Ledger", "T001K", "Samples"]
+PROJECT_SPREADSHEET_TYPES = ["T030", "SKAT", "TrialBalance", "Ledger", "T001K", "MARC", "Samples"]
 PROJECT_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
 PROJECT_DATA_EXTS = {".csv", ".xlsx", ".xls", ".txt"}
 TRIAL_BALANCE_NAME_HINTS = ["科余", "课余", "余额", "发生额", "余额表", "faglflext", "trial", "balance", "tb"]
 LEDGER_NAME_HINTS = ["序时账", "凭证明细", "全量凭证", "明细账", "journal", "ledger", "bseg", "bkpf", "fbl3n", "line item"]
 T030_NAME_HINTS = ["t030", "obyc", "自动过账", "过账配置", "配置表"]
+MARC_NAME_HINTS = ["marc", "物料主数据", "物料评估", "material master", "material_master", "评估分类"]
 
 def project_upload_display_name(uploaded_file):
     return str(getattr(uploaded_file, "name", "") or "未命名文件").replace("\\", "/")
@@ -530,6 +541,7 @@ def project_filename_score(name, file_type):
         "TrialBalance": TRIAL_BALANCE_NAME_HINTS + ["acdoca"],
         "Ledger": LEDGER_NAME_HINTS,
         "T001K": ["t001k", "评估范围", "评估分组"],
+        "MARC": MARC_NAME_HINTS,
         "Samples": ["sample", "samples", "样本", "fb03", "凭证", "清单", "inf"],
     }
     score = 0
@@ -552,6 +564,7 @@ def project_preferred_type_from_filename(name):
         ("Ledger", LEDGER_NAME_HINTS),
         ("TrialBalance", TRIAL_BALANCE_NAME_HINTS + ["acdoca"]),
         ("T001K", ["t001k", "评估范围", "评估分组"]),
+        ("MARC", MARC_NAME_HINTS),
         ("T030", T030_NAME_HINTS),
         ("SKAT", ["skat", "科目主数据", "总账科目表"]),
         ("Samples", ["sample", "samples", "样本", "fb03", "凭证"]),
@@ -692,7 +705,7 @@ def classify_project_upload(uploaded_file):
     }
 
 def clear_project_imported_data():
-    for file_type in ["T030", "SKAT", "TrialBalance", "Ledger", "Samples", "T001K"]:
+    for file_type in ["T030", "SKAT", "TrialBalance", "Ledger", "Samples", "T001K", "MARC"]:
         path = os.path.join(SESSION_DATA_DIR, f"{file_type}.csv")
         if os.path.exists(path):
             try:
@@ -709,6 +722,8 @@ def clear_project_imported_data():
     st.session_state.ledger_analysis_signature = None
     st.session_state.t001k_ready = False
     st.session_state.t001k_signature = None
+    st.session_state.marc_ready = False
+    st.session_state.marc_signature = None
     st.session_state.mm03_image_names = []
     st.session_state.mm03_records = []
     st.session_state.mm03_signature = None
@@ -985,6 +1000,18 @@ def process_project_folder_upload(project_files, selected_model):
             loaded_items.append("T001K 公司代码/评估分组")
         else:
             warnings.append(f"T001K 加载失败：{t001k_msg}")
+
+    marc_files = [uploaded for _, uploaded in grouped["MARC"]]
+    if marc_files:
+        marc_ok, marc_msg, marc_count = validate_uploads_to_session(marc_files, "MARC")
+        if marc_ok:
+            st.session_state.marc_ready = True
+            st.session_state.marc_signature = ("project-folder", signature, "MARC", marc_count)
+            st.session_state.ledger_analysis_records = []
+            st.session_state.ledger_analysis_signature = None
+            loaded_items.append(f"{marc_count} 张 MARC 物料主数据")
+        else:
+            warnings.append(f"MARC 加载失败：{marc_msg}")
 
     sample_files = [uploaded for _, uploaded in grouped["Samples"]]
     if sample_files:
@@ -1332,11 +1359,11 @@ def valid_sample_scenarios(records, scenario_options):
 
 SCENARIO_PROCESS_GROUPS = {
     "销售发货": "销售与收款",
-    "销售入账": "销售与收款",
+    "销售发票校验": "销售与收款",
     "销售成本结转": "销售与收款",
     "收款核销": "销售与收款",
     "采购收货": "采购与付款",
-    "采购入账": "采购与付款",
+    "采购发票校验": "采购与付款",
     "生产领料": "存货与生产成本",
     "完工入库": "存货与生产成本",
     "工单差异": "存货与生产成本",
@@ -1387,7 +1414,7 @@ def subscenario_labels_for_detail(scenario_name, account_code="", description=""
             add("销售发货成本过账")
         if "GISS" in ktosl_values:
             add("销售发货消耗")
-    elif scenario_name == "销售入账":
+    elif scenario_name == "销售发票校验":
         if "REV" in ktosl_values:
             add("收入确认")
         if "MWS" in ktosl_values:
@@ -1404,7 +1431,7 @@ def subscenario_labels_for_detail(scenario_name, account_code="", description=""
             add("GR/IR 暂估")
         if "BSX" in ktosl_values or any(word in description for word in ["原材料", "库存商品", "半成品", "包装物", "周转材料"]):
             add("存货入库")
-    elif scenario_name == "采购入账":
+    elif scenario_name == "采购发票校验":
         if "WRX" in ktosl_values or "GR/IR" in description.upper():
             add("GR/IR 清账")
         if "VST" in ktosl_values or "进项" in description:
@@ -1541,8 +1568,8 @@ def render_account_quantity_coverage(ranked):
     if not coverage:
         return
 
-    st.markdown("### 自动科目识别看板")
-    st.caption("以科目余额/发生额表中的唯一科目为基数，统计有多少科目已经落入当前自动分录场景范围。目标用于辅助判断自动凭证测试覆盖面，不替代审计判断。")
+    st.markdown("### 自动化凭证科目识别看板")
+    st.caption("以科目余额/发生额表中的唯一科目为基数，统计有多少科目已经落入 SAP 自动化凭证场景库。目标用于辅助判断自动凭证测试覆盖面，不替代审计判断。")
     metric_cols = st.columns(4)
     metric_cols[0].metric("科余表科目数", f"{coverage['total_accounts']}")
     metric_cols[1].metric("命中规定场景科目", f"{coverage['matched_accounts']}")
@@ -1550,7 +1577,7 @@ def render_account_quantity_coverage(ranked):
     metric_cols[3].metric("未命中科目", f"{coverage['unmatched_accounts']}")
 
     if coverage["coverage_pct"] >= 90:
-        st.success("已识别出 90% 以上客户科目与当前自动分录场景的关系，可进入样本覆盖范围筛选。")
+        st.success("已识别出 90% 以上客户科目与当前自动化凭证场景的关系，可进入样本覆盖范围筛选。")
     else:
         st.warning("当前科目数量覆盖率低于 90%。可补充固定资产、税费、人工、费用分摊等场景规则，或检查客户科目描述和配置表完整性。")
 
@@ -1560,6 +1587,7 @@ def current_ledger_analysis_signature():
         st.session_state.get("scenario_preview_schema_version"),
         tuple((row.get("name"), tuple(row.get("raw_accounts", [])), tuple(row.get("amount_accounts", []))) for row in st.session_state.get("scenario_preview", [])),
         st.session_state.get("t001k_signature"),
+        st.session_state.get("marc_signature"),
         st.session_state.get("mm03_signature"),
         len(st.session_state.get("mm03_records", []) or []),
     )
@@ -1586,6 +1614,7 @@ def ensure_ledger_analysis_current(ranked):
         load_session_table("T030"),
         load_session_table("T001K"),
         st.session_state.mm03_records,
+        load_session_table("MARC"),
     )
     st.session_state.ledger_analysis_records = analysis_df.to_dict("records") if not analysis_df.empty else []
     st.session_state.ledger_analysis_signature = signature
@@ -1607,8 +1636,8 @@ def render_full_ledger_testing_dashboard(ranked):
     exception_df = build_exception_ledger(analysis_df)
     display_df = ledger_display_dataframe(analysis_df)
 
-    st.markdown("### 全量自动化凭证实质性测试覆盖")
-    st.caption("基于全量序时账逐行识别自动分录场景，并结合公司代码、物料号、T001K/MM03 与 T030 配置判断是否可作为已完成实质性测试覆盖。")
+    st.markdown("### 全量 SAP 自动化凭证实质性测试覆盖")
+    st.caption("基于全量序时账逐行识别自动化凭证场景，并结合公司代码、物料号、T001K、MARC/MM03 与 T030 配置判断是否可作为已完成实质性测试覆盖。")
     metric_cols = st.columns(5)
     metric_cols[0].metric("凭证行数", f"{summary['total_lines']:,}")
     metric_cols[1].metric("已覆盖行数", f"{summary['covered_lines']:,}")
@@ -1808,8 +1837,8 @@ def render_testing_coverage_dashboard(ranked):
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("### 审计测试覆盖 Dashboard")
-    st.caption("按已识别测试场景和子场景颗粒度选择拟测试范围，实时查看已选项目覆盖整体金额的比例。流程分类仅用于阅读，不作为聚合口径。")
+    st.markdown("### 全量实质性测试覆盖 Dashboard")
+    st.caption("按已识别 SAP 自动化凭证场景和子场景颗粒度选择拟测试项目，实时查看已选项目覆盖整体金额的比例。流程分类仅用于阅读，不作为聚合口径。")
 
     scenario_rank = (
         coverage_df.groupby("审计场景", as_index=False)["金额"]
@@ -1885,12 +1914,12 @@ def render_testing_coverage_dashboard(ranked):
 
     hero_slot = layout_cols[1].empty()
     editor_df = coverage_df.copy()
-    editor_df.insert(0, "纳入测试范围", editor_df["覆盖项ID"].astype(str).isin(selected_keys))
+    editor_df.insert(0, "纳入审计覆盖", editor_df["覆盖项ID"].astype(str).isin(selected_keys))
     editor_df["金额"] = editor_df["金额"].round(2)
     editor_df["占整体"] = editor_df["占整体"].round(2)
     editor_df["占场景"] = editor_df["占场景"].round(2)
     editor_cols = [
-        "纳入测试范围", "覆盖项ID", "流程分类", "审计场景", "子场景标签",
+        "纳入审计覆盖", "覆盖项ID", "流程分类", "审计场景", "子场景标签",
         "科目编码", "科目描述", "金额", "占整体", "占场景", "命中公司数",
     ]
     edited_df = st.data_editor(
@@ -1900,14 +1929,14 @@ def render_testing_coverage_dashboard(ranked):
         key="audit_coverage_editor",
         column_config={
             "覆盖项ID": None,
-            "纳入测试范围": st.column_config.CheckboxColumn("已选"),
+            "纳入审计覆盖": st.column_config.CheckboxColumn("已选"),
             "金额": st.column_config.NumberColumn("金额", format="%.2f"),
             "占整体": st.column_config.NumberColumn("占整体 %", format="%.2f"),
             "占场景": st.column_config.NumberColumn("占场景 %", format="%.2f"),
         },
-        disabled=[col for col in editor_cols if col != "纳入测试范围"],
+        disabled=[col for col in editor_cols if col != "纳入审计覆盖"],
     )
-    selected_keys = set(edited_df.loc[edited_df["纳入测试范围"], "覆盖项ID"].astype(str))
+    selected_keys = set(edited_df.loc[edited_df["纳入审计覆盖"], "覆盖项ID"].astype(str))
     st.session_state.audit_coverage_selected_keys = selected_keys
     selected_df = coverage_df[coverage_df["覆盖项ID"].astype(str).isin(selected_keys)]
     selected_amount = float(selected_df["金额"].sum()) if not selected_df.empty else 0.0
@@ -1986,11 +2015,11 @@ def render_testing_coverage_dashboard(ranked):
     if not unselected_df.empty:
         unselected_display = unselected_df.head(10).copy()
         unselected_count = len(unselected_display)
-        st.markdown(f"**未选择测试范围金额排名 Top {unselected_count}**")
+        st.markdown(f"**未纳入审计覆盖金额排名 Top {unselected_count}**")
         if not achieved_target:
-            st.caption("以下项目尚未纳入测试范围，可优先补选以满足最低风险覆盖要求。")
+            st.caption("以下项目尚未纳入审计覆盖，可优先补选以满足最低风险覆盖要求。")
         else:
-            st.caption("已达到当前覆盖要求；下列项目为尚未纳入测试范围的剩余重大项目。")
+            st.caption("已达到当前覆盖要求；下列项目为尚未纳入审计覆盖的剩余重大项目。")
         unselected_cols = ["流程分类", "审计场景", "子场景标签", "科目编码", "科目描述", "金额", "占整体", "占场景"]
         unselected_display = unselected_display[unselected_cols]
         unselected_display["金额"] = unselected_display["金额"].map(lambda value: f"{float(value):,.2f}")
@@ -1998,7 +2027,7 @@ def render_testing_coverage_dashboard(ranked):
         unselected_display["占场景"] = unselected_display["占场景"].map(lambda value: f"{float(value):.2f}%")
         st.dataframe(unselected_display, width="stretch", hide_index=True)
     else:
-        st.success("所有覆盖项均已纳入测试范围。")
+        st.success("所有覆盖项均已纳入审计覆盖。")
 
 def build_audit_dashboard_rows(ranked):
     rows = []
@@ -2068,8 +2097,8 @@ def render_general_audit_dashboard(ranked):
         unmatched_count = int((mapping_df["匹配状态"] == "未匹配科目名称").sum()) if not mapping_df.empty else 0
         matched_count = max(account_count - unmatched_count, 0)
 
-        st.markdown("### 审计价值 Dashboard")
-        st.caption("已完成 SAP 自动分录配置到财务科目的映射。上传科目余额/发生额表后，将进一步量化各场景对财务报表科目的影响。")
+        st.markdown("### 智审 V.A.S.T. 审计价值 Dashboard")
+        st.caption("已完成 SAP 自动化凭证配置到财务科目的映射。上传科目余额/发生额表后，将进一步量化各场景对财务报表科目的影响。")
         metric_cols = st.columns(4)
         metric_cols[0].metric("识别业务场景", f"{scenario_count}")
         metric_cols[1].metric("配置关联科目", f"{account_count}")
@@ -2102,8 +2131,8 @@ def render_general_audit_dashboard(ranked):
             render_scenario_preview(ranked, show_amount=False)
         return
 
-    st.markdown("### 审计价值 Dashboard")
-    st.caption("从财务审计视角查看 SAP 自动分录对业务场景、公司和财务科目的影响；需要追溯时再展开底层配置与明细。")
+    st.markdown("### 智审 V.A.S.T. 审计价值 Dashboard")
+    st.caption("从财务审计视角查看 SAP 自动化凭证对业务场景、公司和财务科目的影响；需要追溯时再展开底层配置与明细。")
 
     total_amount = float(dashboard_df["合计金额"].sum())
     scenario_count = int(dashboard_df["审计场景"].nunique())
@@ -2145,7 +2174,7 @@ def render_general_audit_dashboard(ranked):
     ]
     if not concentrated_companies.empty:
         company_text = "、".join(f"{row['公司代码']}（{float(row['合计金额']):,.2f}）" for _, row in concentrated_companies.iterrows())
-        summary_lines.append(f"自动分录金额较集中的公司包括：**{company_text}**，建议结合样本覆盖情况安排穿行测试。")
+        summary_lines.append(f"自动化凭证金额较集中的公司包括：**{company_text}**，建议结合样本覆盖情况安排穿行测试。")
     if sample_focus:
         summary_lines.append("建议优先抽样对象：" + "；".join(sample_focus[:3]) + "。")
 
@@ -2768,8 +2797,8 @@ header_html = f"""
     <div style="display: flex; align-items: center;">
         <img src="data:image/png;base64,{logo_b64}" class="kpmg-header-logo">
         <div style="display: flex; flex-direction: column; justify-content: center;">
-            <span class="kpmg-main-title">TSDA 测试范围框定辅助驾驶舱</span>
-            <span class="kpmg-sub-title">面向财务审计与 IT 审计的自动过账、科目归集和样本证据分析工具</span>
+            <span class="kpmg-main-title">{PRODUCT_NAME}</span>
+            <span class="kpmg-sub-title">{PRODUCT_SUBTITLE}</span>
         </div>
     </div>
     <div style="text-align: right; color: white;">
@@ -2798,15 +2827,15 @@ if st.session_state.results:
     if st.session_state.show_balloons:
         st.balloons(); st.session_state.show_balloons = False
     res = st.session_state.results
-    t1, t2, t3 = st.tabs(["📊 1. 审计影响总览", "📝 2. 样本证据叙述", "📥 3. 底稿成果下载"])
+    t1, t2, t3 = st.tabs(["📊 1. 全量实质性测试看板", "📝 2. 自动化凭证证据叙述", "📥 3. 标准底稿与异常清单"])
     with t1:
-        st.subheader("SAP 自动分录对财务审计的影响")
+        st.subheader("SAP 自动化凭证全量实质性测试覆盖")
         if res["ranked"]:
             render_general_audit_dashboard(res["ranked"])
             st.write("---")
             render_scenario_preview(res["ranked"], show_amount=True)
     with t2:
-        st.subheader("TOD/TOE 样本证据描述")
+        st.subheader("自动化凭证 TOD/TOE 样本证据描述")
         di_items = res.get("di", [])
         if di_items:
             for it in di_items:
@@ -2815,9 +2844,9 @@ if st.session_state.results:
         else:
             st.info("未生成 TOD/TOE 描述：当前样本没有命中任何场景关联科目。请检查 OCR 结果或样本清单中的凭证号、科目编码和金额字段。")
     with t3:
-        st.subheader("最终成果文件导出")
+        st.subheader("标准底稿与异常清单导出")
         with open(res["report_path"], "rb") as f:
-            st.download_button(label="📥 下载最终 Excel 审计底稿", data=f.read(), file_name=f"ITAC_WP_{st.session_state.audit_context.get('entity_name','Audit')}.xlsx", width="stretch")
+            st.download_button(label="📥 下载智审 V.A.S.T. Excel 审计底稿", data=f.read(), file_name=f"VAST_AutoVoucher_Audit_{st.session_state.audit_context.get('entity_name','Audit')}.xlsx", width="stretch")
         st.write("") 
         if st.button("🔄 开启新的审计任务", width="stretch"):
             st.session_state.session_id = str(uuid.uuid4())
@@ -2835,6 +2864,8 @@ if st.session_state.results:
             st.session_state.trial_balance_signature = None
             st.session_state.t001k_ready = False
             st.session_state.t001k_signature = None
+            st.session_state.marc_ready = False
+            st.session_state.marc_signature = None
             st.session_state.mm03_image_names = []
             st.session_state.mm03_records = []
             st.session_state.mm03_signature = None
@@ -2849,15 +2880,21 @@ if st.session_state.results:
     st.stop()
 
 # Progress
-steps = ["📌 审计背景", "📊 自动分录映射", "📸 审计证据与分析"]
+steps = ["📌 审计项目与数据包", "📊 自动化凭证场景识别", "📸 全量实质性测试看板"]
 st.write(f"当前进度: **第 {st.session_state.current_step} 步 / 共 3 步** — {steps[st.session_state.current_step-1]}")
 st.progress(st.session_state.current_step / 3.0)
 
 # --- STEP 1 ---
 if st.session_state.current_step == 1:
-    st.subheader("步骤 1: 设置审计项目背景")
+    st.subheader("步骤 1: 审计项目与 SAP 数据包")
     st.markdown("**一键上传项目资料文件夹（推荐）**")
-    st.caption("可直接选择项目文件夹，系统会自动识别并加载 T030、SKAT、全量序时账/凭证明细、余额/发生额表、T001K、样本清单、MM03 截图和凭证截图；后续步骤只需查看、筛选和必要时补充。")
+    st.caption("可直接选择项目文件夹，系统会自动识别并加载 T030、SKAT、全量序时账/凭证明细、余额/发生额表、T001K、MARC、样本清单、MM03 截图和凭证截图；后续步骤只需查看、筛选和必要时补充。")
+    st.info(PRODUCT_TAGLINE)
+    value_cols = st.columns(4)
+    value_cols[0].metric("V", "Voucher", "凭证场景识别")
+    value_cols[1].metric("A", "Automated", "自动过账配置验证")
+    value_cols[2].metric("S", "Substantive", "全量实质性覆盖")
+    value_cols[3].metric("T", "Testing", "证据化底稿输出")
     project_folder_files = st.file_uploader(
         "选择项目资料文件夹",
         type=["csv", "xlsx", "xls", "txt", "jpg", "jpeg", "png"],
@@ -2872,15 +2909,15 @@ if st.session_state.current_step == 1:
         with c1:
             entity_name = st.text_input("被审计单位", placeholder="输入公司名称")
             saved_system_version = current_system_version()
-            system_index = SYSTEM_VERSION_OPTIONS.index(saved_system_version) if saved_system_version in SYSTEM_VERSION_OPTIONS else 1
-            system_name = st.selectbox("测试系统/版本", SYSTEM_VERSION_OPTIONS, index=system_index)
+            system_index = SYSTEM_VERSION_OPTIONS.index(saved_system_version) if saved_system_version in SYSTEM_VERSION_OPTIONS else 0
+            system_name = st.selectbox("SAP 系统/版本", SYSTEM_VERSION_OPTIONS, index=system_index)
         with c2:
             period_start = st.date_input("审计起始日期", value=datetime.date(2026, 1, 1))
             period_end = st.date_input("审计截止日期", value=datetime.date(2026, 12, 31))
         st.write("")
         col_btn = st.columns([1, 1.5, 1])
         with col_btn[1]:
-            if st.form_submit_button("下一步：识别自动分录映射", width="stretch"):
+            if st.form_submit_button("下一步：识别自动化凭证场景", width="stretch"):
                 if entity_name and system_name:
                     st.session_state.audit_context = {"entity_name": entity_name, "system_name": system_name, "system_version": system_name, "period_start": str(period_start), "period_end": str(period_end)}
                     if project_folder_files:
@@ -2898,8 +2935,8 @@ if st.session_state.current_step == 1:
 
 # --- STEP 2 ---
 elif st.session_state.current_step == 2:
-    st.subheader("步骤 2: 识别 SAP 自动分录与财务科目映射")
-    st.caption("上传 SAP 自动过账配置与科目主数据，系统将识别收入、成本、存货、应付和生产等业务场景影响的财务科目。余额表可在下一步补充。")
+    st.subheader("步骤 2: 识别 SAP 自动化凭证业务场景")
+    st.caption("上传 SAP T030 自动过账配置与 SKAT 科目主数据，系统将识别销售发货、销售发票校验、采购收货、采购发票校验、生产领料、完工入库等自动化凭证场景影响的财务科目。")
     render_project_folder_status()
     t030_file = None
     skat_file = None
@@ -2952,7 +2989,7 @@ elif st.session_state.current_step == 2:
     with nav_cols[1]:
         if st.button("返回上一步", width="stretch"): go_to_step(1)
     with nav_cols[2]:
-        if st.button("确认映射并进入审计分析", width="stretch", disabled=not st.session_state.base_files_ready):
+        if st.button("确认场景识别并进入全量实质性测试", width="stretch", disabled=not st.session_state.base_files_ready):
             go_to_step(3)
 
 # --- STEP 3 ---
@@ -2963,15 +3000,15 @@ elif st.session_state.current_step == 3:
             go_to_step(2)
         st.stop()
 
-    st.subheader("步骤 3: 审计影响分析与样本证据采集")
+    st.subheader("步骤 3: 全量实质性测试看板与样本证据采集")
     if is_s4_system():
-        st.caption("SAP S/4 HANA：请上传手工整理过的编辑版科余表，或已按 ACDOCA 归集后的核对表；原始 ACDOCA 明细表过大时不建议直接上传。")
+        st.caption("SAP S/4 HANA：请上传已整理的全量序时账/ACDOCA 归集核对结果；原始 ACDOCA 明细过大时不建议直接上传。")
         tb_label = "可选：S/4 编辑版科目余额/发生额表或 ACDOCA 归集核对表（用于补充金额分析）"
     else:
         tb_label = "可选：科目余额/发生额表（用于补充金额分析和部分科目名称）"
     render_project_folder_status()
     ledger_files = []
-    ledger_label = "推荐：全量序时账/凭证明细表（用于逐笔场景归类、配置验证与异常凭证清单）"
+    ledger_label = "推荐：全量序时账/凭证明细表（用于逐笔场景归类、配置验证、手工/异常凭证筛查）"
     if st.session_state.ledger_ready:
         st.success("全量序时账/凭证明细已加载。需要补充或替换时可展开下方区域。")
         with st.expander("补充或替换全量序时账/凭证明细", expanded=False):
@@ -3016,7 +3053,7 @@ elif st.session_state.current_step == 3:
     elif st.session_state.trial_balance_ready:
         st.success("已加载本会话的科目余额/发生额表。")
     else:
-        st.info("可以先跳过金额表，直接上传样本或凭证截图生成底稿；审计影响金额将在上传金额表后显示。")
+        st.info("余额/发生额表用于补充金额影响分析；是否按 T030 配置生成，以全量序时账、T001K、MARC/MM03 与 T030 的逐笔验证为准。")
 
     ensure_scenario_preview_current()
     render_full_ledger_testing_dashboard(st.session_state.scenario_preview)
@@ -3026,12 +3063,14 @@ elif st.session_state.current_step == 3:
     st.write("---")
     with st.expander("技术补充与抽样场景表（可选）", expanded=False):
         st.markdown("**补充主数据并导出抽样场景表**")
-        st.caption("补充公司代码与评估范围、物料主数据等 SAP 技术信息，用于把金额分析转换成可执行的样本覆盖范围。")
-        master_cols = st.columns(2)
+        st.caption("补充公司代码与评估范围、MARC 物料主数据或 MM03 截图等 SAP 技术信息，用于把金额分析转换成可执行的样本覆盖范围。")
+        master_cols = st.columns(3)
         with master_cols[0]:
             t001k_file = st.file_uploader("T001K 公司代码/评估分组代码表", type=["csv", "xlsx", "xls"])
         with master_cols[1]:
-            mm03_images = st.file_uploader("MM03 物料主数据截图", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+            marc_files = st.file_uploader("MARC 物料主数据表", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+        with master_cols[2]:
+            mm03_images = st.file_uploader("MM03 物料主数据截图（补充证据）", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
         if t001k_file:
             t001k_signature = upload_signature(t001k_file)
@@ -3045,6 +3084,21 @@ elif st.session_state.current_step == 3:
                     st.error(f"❌ T001K 失败: {msg}")
         elif st.session_state.t001k_ready:
             st.success("已加载本会话的 T001K。")
+
+        if marc_files:
+            marc_signature = upload_signature(marc_files)
+            if marc_signature != st.session_state.marc_signature:
+                is_v, msg, file_count = validate_uploads_to_session(marc_files, "MARC")
+                if is_v:
+                    st.session_state.marc_ready = True
+                    st.session_state.marc_signature = marc_signature
+                    st.session_state.ledger_analysis_records = []
+                    st.session_state.ledger_analysis_signature = None
+                    st.success(f"已加载并合并 {file_count} 张 MARC 物料主数据，凭证配置验证将优先使用 MARC。")
+                else:
+                    st.error(f"❌ MARC 失败: {msg}")
+        elif st.session_state.marc_ready:
+            st.success("已加载本会话的 MARC 物料主数据。")
 
         if mm03_images:
             mm03_signature = upload_signature(mm03_images)
@@ -3099,7 +3153,7 @@ elif st.session_state.current_step == 3:
             mm03_records=st.session_state.mm03_records,
         )
         if sampling_df.empty:
-            st.info("当前暂无可导出的抽样场景表，请先完成自动分录映射。")
+            st.info("当前暂无可导出的抽样场景表，请先完成自动化凭证映射。")
         else:
             export_cols = st.columns([1.2, 2.8])
             with export_cols[0]:
@@ -3288,6 +3342,7 @@ elif st.session_state.current_step == 3:
             load_session_table("T030"),
             load_session_table("T001K"),
             st.session_state.mm03_records,
+            load_session_table("MARC"),
         )
         st.session_state.voucher_validation_records = validation_df.to_dict("records") if not validation_df.empty else []
         if not validation_df.empty:
@@ -3345,6 +3400,7 @@ elif st.session_state.current_step == 3:
                     load_session_table("T030"),
                     load_session_table("T001K"),
                     st.session_state.mm03_records,
+                    load_session_table("MARC"),
                 )
                 st.session_state.voucher_validation_records = validation_df.to_dict("records") if not validation_df.empty else []
                 

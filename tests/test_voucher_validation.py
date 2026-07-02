@@ -37,6 +37,35 @@ def test_validate_voucher_t030_logic_passes_matching_material_and_company():
     assert result.iloc[0]["MM03评估分类"] == "3000"
 
 
+def test_validate_voucher_t030_logic_prefers_marc_over_mm03():
+    samples = pd.DataFrame([{
+        "DOC_NUM": "900004",
+        "SCENARIO": "采购收货",
+        "COMPANY_CODE": "4000",
+        "MATNR": "MAT-2",
+        "SAKNR": "2202030100",
+        "SHKZG": "H",
+        "KTOSL": "WRX",
+    }])
+    t030 = pd.DataFrame([{
+        "KTOSL": "WRX",
+        "KOMOK": "",
+        "BWMOD": "4110",
+        "BKLAS": "3000",
+        "KONTS": "1403000000",
+        "KONTH": "2202030100",
+    }])
+    t001k = pd.DataFrame([{"BUKRS": "4000", "BWMOD": "4110"}])
+    mm03_records = [{"material_number": "MAT-2", "plant": "4110", "valuation_class": "9999"}]
+    marc = pd.DataFrame([{"MATNR": "MAT-2", "WERKS": "4110", "BKLAS": "3000"}])
+
+    result = validate_voucher_t030_logic(samples, t030, t001k, mm03_records, marc)
+
+    assert result.iloc[0]["校验结论"] == "通过"
+    assert result.iloc[0]["物料主数据来源"] == "MARC"
+    assert result.iloc[0]["MARC/MM03评估分类"] == "3000"
+
+
 def test_validate_voucher_t030_logic_flags_mismatched_account():
     samples = pd.DataFrame([{
         "DOC_NUM": "900002",

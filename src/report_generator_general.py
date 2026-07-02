@@ -2,6 +2,6 @@ from report_generator import ReportGenerator
 
 
 class GeneralAuditReportGenerator(ReportGenerator):
-    """TSDA uses the standard voucher audit working-paper generator."""
+    """V.A.S.T. uses the standard SAP automated-voucher working-paper generator."""
 
     pass

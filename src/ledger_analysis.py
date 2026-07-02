@@ -183,14 +183,14 @@ def classify_ledger_scenarios(ledger_df, ranked):
         if not scored:
             item["SCENARIO"] = ""
             item["SCENARIO_MATCH_STATUS"] = "无法匹配自动化场景"
-            item["SCENARIO_MATCH_REASON"] = "科目未落入当前自动分录场景库"
+            item["SCENARIO_MATCH_REASON"] = "科目未落入当前自动化凭证场景库"
         else:
             best_score = max(score for score, _ in scored)
             best_rules = [rule for score, rule in scored if score == best_score]
             scenario_names = sorted({rule["scenario"] for rule in best_rules})
             item["SCENARIO"] = "；".join(scenario_names)
             if len(scenario_names) == 1:
-                item["SCENARIO_MATCH_STATUS"] = "已匹配自动化场景"
+                item["SCENARIO_MATCH_STATUS"] = "自动化场景已匹配"
                 item["SCENARIO_MATCH_REASON"] = "科目及可用事务字段命中场景规则"
             else:
                 item["SCENARIO_MATCH_STATUS"] = "多场景候选"
@@ -199,7 +199,7 @@ def classify_ledger_scenarios(ledger_df, ranked):
     return pd.DataFrame(rows)
 
 
-def analyze_ledger(ledger_df, ranked, t030_df=None, t001k_df=None, mm03_records=None):
+def analyze_ledger(ledger_df, ranked, t030_df=None, t001k_df=None, mm03_records=None, marc_df=None):
     tagged = classify_ledger_scenarios(ledger_df, ranked)
     if tagged.empty:
         return tagged
@@ -208,7 +208,7 @@ def analyze_ledger(ledger_df, ranked, t030_df=None, t001k_df=None, mm03_records=
     validation_input["SCENARIO"] = validation_input["SCENARIO"].apply(
         lambda value: str(value).split("；")[0] if str(value or "").strip() else ""
     )
-    validation = validate_voucher_t030_logic(validation_input, t030_df, t001k_df, mm03_records)
+    validation = validate_voucher_t030_logic(validation_input, t030_df, t001k_df, mm03_records, marc_df)
     validation = validation.reset_index(drop=True)
     tagged = tagged.reset_index(drop=True)
 
@@ -216,12 +216,12 @@ def analyze_ledger(ledger_df, ranked, t030_df=None, t001k_df=None, mm03_records=
     notes = validation["校验说明"].tolist() if not validation.empty and "校验说明" in validation.columns else []
     expected = validation["T030期望科目"].tolist() if not validation.empty and "T030期望科目" in validation.columns else []
 
-    tagged["CONFIG_VALIDATION_STATUS"] = [conclusions[idx] if idx < len(conclusions) else "待补充" for idx in range(len(tagged))]
+    tagged["CONFIG_VALIDATION_STATUS"] = [_standard_config_status(conclusions[idx] if idx < len(conclusions) else "待补充") for idx in range(len(tagged))]
     tagged["CONFIG_VALIDATION_NOTE"] = [notes[idx] if idx < len(notes) else "" for idx in range(len(tagged))]
     tagged["T030_EXPECTED_ACCOUNT"] = [expected[idx] if idx < len(expected) else "" for idx in range(len(tagged))]
     tagged["SUBSTANTIVE_TEST_STATUS"] = tagged.apply(
         lambda row: "已完成实质性测试"
-        if row.get("SCENARIO_MATCH_STATUS") == "已匹配自动化场景" and row.get("CONFIG_VALIDATION_STATUS") == "通过"
+        if row.get("SCENARIO_MATCH_STATUS") == "自动化场景已匹配" and row.get("CONFIG_VALIDATION_STATUS") == "配置逻辑通过"
         else "未完成实质性测试",
         axis=1,
     )
@@ -237,9 +237,37 @@ def _exception_type(row):
     if row.get("SCENARIO_MATCH_STATUS") == "多场景候选":
         return "多场景候选，需补充事务字段"
     status = _clean_text(row.get("CONFIG_VALIDATION_STATUS"))
-    if status and status != "通过":
-        return f"配置验证{status}"
+    if status == "字段待补充":
+        return _field_gap_reason(row.get("CONFIG_VALIDATION_NOTE"))
+    if status and status != "配置逻辑通过":
+        return status
     return "无法完成自动化测试"
+
+
+def _standard_config_status(status):
+    status = _clean_text(status)
+    if status == "通过":
+        return "配置逻辑通过"
+    if status == "不一致":
+        return "配置逻辑不通过"
+    if status in {"待补充", "待核对"}:
+        return "字段待补充"
+    return status or "字段待补充"
+
+
+def _field_gap_reason(note):
+    note = _clean_text(note)
+    if "公司代码" in note:
+        return "缺少公司代码"
+    if "物料号" in note:
+        return "缺少物料号"
+    if "T001K" in note:
+        return "缺少 T001K"
+    if "MARC" in note or "MM03" in note or "评估分类" in note:
+        return "缺少 MARC/MM03"
+    if "T030" in note:
+        return "缺少 T030 或配置未命中"
+    return "字段待补充"
 
 
 def ledger_display_dataframe(analysis_df):

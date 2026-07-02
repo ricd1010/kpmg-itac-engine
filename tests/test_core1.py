@@ -89,7 +89,7 @@ def test_core1_uses_last_period_per_company_for_trial_balance(tmp_path):
 
     results = Core1Orchestrator(tmp_path).run()
     purchase_receipt = next(result for result in results if result["name"] == "采购收货")
-    sales_entry = next(result for result in results if result["name"] == "销售入账")
+    sales_entry = next(result for result in results if result["name"] == "销售发票校验")
 
     assert purchase_receipt["raw_accounts"] == ["1403000000", "2202040000"]
     assert purchase_receipt["amount_accounts"] == ["2202040000"]

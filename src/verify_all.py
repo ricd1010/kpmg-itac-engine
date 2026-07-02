@@ -49,7 +49,7 @@ def verify_all():
         required_sheets = [
             "审计摘要",
             "T030&SKAT 科目配置",
-            "T001K_MM03 评估信息",
+            "T001K_MARC_MM03 评估信息",
             "样本凭证明细",
             "Information",
             "异常_待补充清单",
@@ -61,7 +61,7 @@ def verify_all():
     except Exception as e:
         raise Exception(f"Excel 文件损坏或无法打开: {str(e)}")
 
-    print("\n✅ 所有功能测试通过！最终底稿 Excel 格式校验成功。")
+    print("\nOK: 所有功能测试通过！最终底稿 Excel 格式校验成功。")
 
 if __name__ == "__main__":
     verify_all()

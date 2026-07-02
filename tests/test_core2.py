@@ -60,7 +60,7 @@ def test_core2_infers_credit_direction_for_negative_ocr_amount(tmp_path):
     orchestrator.llm_client = FakeLLM()
 
     results = orchestrator.generate_di_descriptions([{
-        "name": "采购入账",
+        "name": "采购发票校验",
         "accounts": ["2202040000 (应付账款-GR/IR)"],
     }])
 

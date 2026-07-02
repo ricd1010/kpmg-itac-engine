@@ -127,7 +127,7 @@ def test_balance_like_file_does_not_validate_as_t030(tmp_path):
     ok, msg, _ = DataValidator.validate_file(MockUpload(balance_path), "T030")
 
     assert not ok
-    assert "KTOSL" in msg
+    assert "疑似科目余额" in msg
 
 
 def test_balance_like_file_does_not_validate_as_skat(tmp_path):
@@ -189,6 +189,25 @@ def test_samples_maps_material_number(tmp_path):
     assert ok, msg
     assert "MATNR" in df.columns
     assert df.iloc[0]["MATNR"] == "TX5F6609-0000"
+
+
+def test_marc_maps_material_plant_and_valuation_class(tmp_path):
+    marc_path = tmp_path / "marc.csv"
+    marc_path.write_text(
+        "\n".join([
+            "物料号,工厂编号,评估分类",
+            "MAT-001,4110,3000",
+        ]),
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(marc_path), "MARC")
+
+    assert ok, msg
+    assert {"MATNR", "WERKS", "BKLAS"}.issubset(df.columns)
+    assert df.iloc[0]["MATNR"] == "MAT-001"
+    assert df.iloc[0]["WERKS"] == "4110"
+    assert df.iloc[0]["BKLAS"] == "3000"
 
 
 def test_trial_balance_maps_company_period_and_monthly_debit_columns(tmp_path):

@@ -12,7 +12,8 @@ class DataValidator:
         "TrialBalance": ["SAKNR", "DMBTR_DEBIT"],
         "Samples": ["DOC_NUM", "SAKNR", "AMOUNT"],
         "Ledger": ["DOC_NUM", "SAKNR", "AMOUNT"],
-        "T001K": ["BUKRS", "BWMOD"]
+        "T001K": ["BUKRS", "BWMOD"],
+        "MARC": ["MATNR", "WERKS", "BKLAS"]
     }
 
     @staticmethod
@@ -102,8 +103,8 @@ class DataValidator:
             df.columns = [str(c).strip() for c in df.columns]
             df = DataValidator._map_columns(df, file_type)
 
-            if file_type == "SKAT" and DataValidator._looks_like_trial_balance(df):
-                return False, "SKAT 表识别失败：检测到公司代码、余额或发生额字段，疑似科目余额/发生额表。", None
+            if file_type in {"SKAT", "T030"} and DataValidator._looks_like_trial_balance(df):
+                return False, f"{file_type} 表识别失败：检测到公司代码、余额或发生额字段，疑似科目余额/发生额表。", None
             
             # T030 专项补丁
             if file_type == "T030":
@@ -231,6 +232,7 @@ class DataValidator:
             "本月借方发生额": 15, "本年借方累计": 15, "本年贷方累计": 15, "会计期间": 15, "公司代码": 15,
             "bwkey": 20, "bukrs": 20, "bwmod": 20, "评估范围": 20, "评估分组": 20,
             "buchungskreis": 20, "bewertungsmodifikation": 20, "bewertungsklasse": 20, "sachkonto": 20,
+            "matnr": 20, "werks": 20, "material": 20, "materialnummer": 20, "物料号": 20, "工厂": 20, "评估分类": 20,
             "txt50": 10, "短文本": 10, "科目名称": 10, "科目描述": 10, "科目编码": 10, "帐目表": 10
         }
         # 严禁词：只针对纯粹的 metadata 标题
@@ -367,6 +369,12 @@ class DataValidator:
             mapping = {
                 "BUKRS": ["bukrs", "公司代码", "公司编码", "company code", "companycode", "buchungskreis", "bukr"],
                 "BWMOD": ["bwmod", "评估分组", "评估分组代码", "valuation grouping code", "valuationgroupingcode", "bewertungsmodifikation", "bewertmodif"],
+            }
+        elif file_type == "MARC":
+            mapping = {
+                "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "物料代码", "material", "material number", "materialnummer"],
+                "WERKS": ["werks", "plant", "factory", "工厂", "工厂编号", "工厂代码", "werk"],
+                "BKLAS": ["bklas", "valcl", "评估分类", "评估类", "评估类字段", "valuation class", "valuationclass", "bewertungsklasse"],
             }
         elif file_type == "Ledger":
             mapping = common_mapping

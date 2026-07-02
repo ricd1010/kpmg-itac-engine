@@ -39,7 +39,7 @@ def extract_data():
         'AMOUNT': 145236.0
     })
 
-    # 2.2.2 采购入账 (P2P_03)
+    # 2.2.2 采购发票校验 (P2P_03)
     # Sheet: P2P_03_2.1.1 原奶
     df_03 = pd.read_excel(p2p_03_path, sheet_name='P2P_03_2.1.1 原奶')
     # Row 1 is KBS, Row 2 is WRX (AP), Row 3 is PRD (GRIR)

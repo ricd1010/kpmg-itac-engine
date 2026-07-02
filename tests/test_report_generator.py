@@ -59,14 +59,14 @@ def test_report_generator_creates_standard_working_paper_sheets(tmp_path):
         "审计摘要",
         "采购收货",
         "T030&SKAT 科目配置",
-        "T001K_MM03 评估信息",
+        "T001K_MARC_MM03 评估信息",
         "样本凭证明细",
         "Information",
         "异常_待补充清单",
     ]:
         assert sheet in wb.sheetnames
 
-    assert wb["审计摘要"]["A1"].value == "TSDA 自动化凭证审计底稿 - Executive Summary"
+    assert wb["审计摘要"]["A1"].value == "智审 V.A.S.T. 自动化凭证审计底稿 - Executive Summary"
     assert wb["采购收货"]["D2"].value == "设计和执行(D&I)"
     assert wb["采购收货"]["D6"].value == "控制 / Control"
 

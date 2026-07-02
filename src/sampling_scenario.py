@@ -201,7 +201,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                         "科目金额": 0.0,
                         "占比": "",
                         "场景金额": scenario_amount,
-                        "抽样建议": "如该场景为测试范围，请补充对应会计凭证或说明未命中原因",
+                        "抽样建议": "如该场景为审计覆盖范围，请补充对应会计凭证或说明未命中原因",
                     } | mm03_fields)
                     continue
 

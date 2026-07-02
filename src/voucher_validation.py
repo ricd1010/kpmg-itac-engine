@@ -95,6 +95,29 @@ def build_mm03_lookup(mm03_records):
     return lookup
 
 
+def build_marc_lookup(marc_df):
+    lookup = {}
+    if marc_df is None or not hasattr(marc_df, "empty") or marc_df.empty:
+        return lookup
+    df = marc_df.copy()
+    df.columns = [str(col).strip().upper() for col in df.columns]
+    for col in ["MATNR", "WERKS", "BKLAS"]:
+        if col not in df.columns:
+            df[col] = ""
+    for _, row in df.iterrows():
+        material = _clean_code(row.get("MATNR"))
+        if not material:
+            continue
+        lookup.setdefault(material, []).append({
+            "material_number": material,
+            "plant": normalize_plant_code(row.get("WERKS", "")),
+            "valuation_class": _clean_code(row.get("BKLAS")),
+            "source_file": "MARC",
+            "source_type": "MARC",
+        })
+    return lookup
+
+
 def _code_related(left, right):
     left = _clean_code(left)
     right = _clean_code(right)
@@ -108,7 +131,7 @@ def _code_related(left, right):
     return any(longer[:idx] + longer[idx + 1:] == shorter for idx in range(len(longer)))
 
 
-def _pick_mm03_record(records, company_code, valuation_group):
+def _pick_material_record(records, company_code, valuation_group):
     if not records:
         return {}
     for record in records:
@@ -149,7 +172,7 @@ def _filter_t030(t030_df, valuation_group, valuation_class, ktosl="", komok=""):
     return t030_df[mask].copy()
 
 
-def validate_voucher_t030_logic(samples_df, t030_df, t001k_df=None, mm03_records=None):
+def validate_voucher_t030_logic(samples_df, t030_df, t001k_df=None, mm03_records=None, marc_df=None):
     if samples_df is None or not hasattr(samples_df, "empty") or samples_df.empty:
         return pd.DataFrame()
 
@@ -161,6 +184,7 @@ def validate_voucher_t030_logic(samples_df, t030_df, t001k_df=None, mm03_records
 
     t030 = _prepare_t030(t030_df)
     t001k_lookup = build_t001k_lookup(t001k_df)
+    marc_lookup = build_marc_lookup(marc_df)
     mm03_lookup = build_mm03_lookup(mm03_records)
     rows = []
 
@@ -172,8 +196,12 @@ def validate_voucher_t030_logic(samples_df, t030_df, t001k_df=None, mm03_records
         account = _clean_account(sample.get("SAKNR"))
         direction = _normalize_direction(sample.get("SHKZG"), sample.get("AMOUNT"))
         valuation_group = t001k_lookup.get(company_code, "")
-        mm03_record = _pick_mm03_record(mm03_lookup.get(material, []), company_code, valuation_group)
-        valuation_class = _clean_code(mm03_record.get("valuation_class"))
+        material_record = _pick_material_record(marc_lookup.get(material, []), company_code, valuation_group)
+        material_source = "MARC" if material_record else ""
+        if not material_record:
+            material_record = _pick_material_record(mm03_lookup.get(material, []), company_code, valuation_group)
+            material_source = "MM03" if material_record else ""
+        valuation_class = _clean_code(material_record.get("valuation_class"))
         expected_col = _direction_account_column(direction)
         expected_accounts = []
         status = "通过"
@@ -190,7 +218,7 @@ def validate_voucher_t030_logic(samples_df, t030_df, t001k_df=None, mm03_records
             note = "缺少凭证物料号，无法定位 MM03 评估分类。"
         elif not valuation_class:
             status = "待补充"
-            note = "MM03 未找到该物料号对应评估分类。"
+            note = "MARC/MM03 未找到该物料号对应评估分类。"
         elif t030.empty:
             status = "待补充"
             note = "缺少 T030 配置表，无法校验自动过账逻辑。"
@@ -224,7 +252,10 @@ def validate_voucher_t030_logic(samples_df, t030_df, t001k_df=None, mm03_records
             "科目编码": account,
             "借贷方向": _direction_label(direction),
             "T001K评估分组": valuation_group,
-            "MM03工厂": mm03_record.get("plant", ""),
+            "物料主数据来源": material_source,
+            "MARC/MM03工厂": material_record.get("plant", ""),
+            "MARC/MM03评估分类": valuation_class,
+            "MM03工厂": material_record.get("plant", ""),
             "MM03评估分类": valuation_class,
             "T030期望科目": "；".join(expected_accounts),
             "校验结论": status,

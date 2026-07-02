@@ -78,7 +78,7 @@ def test_build_scenario_account_totals_sums_same_account_across_companies():
 
 def test_build_scenario_account_totals_ignores_empty_company_values():
     ranked = [
-        {"name": "销售入账", "company_values": []},
+        {"name": "销售发票校验", "company_values": []},
         {"name": "收款核销"},
     ]
 

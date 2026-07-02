@@ -8,7 +8,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 
 class ReportGenerator:
-    """Generate TSDA working papers in the standard voucher audit layout."""
+    """Generate V.A.S.T. SAP automated-voucher audit working papers."""
 
     KPMG_BLUE = "00338D"
     LIGHT_BLUE = "EAF3FF"
@@ -340,13 +340,13 @@ class ReportGenerator:
         ws = wb.active
         ws.title = "审计摘要"
         ws.merge_cells("A1:H1")
-        ws["A1"] = "TSDA 自动化凭证审计底稿 - Executive Summary"
+        ws["A1"] = "智审 V.A.S.T. 自动化凭证审计底稿 - Executive Summary"
         ws["A1"].font = styles["title_font"]
         ws["A1"].alignment = styles["center"]
 
         context_rows = [
             ("被审计单位", audit_context.get("entity_name") or "待补充", "系统版本", audit_context.get("system_version") or audit_context.get("system_name") or "待补充"),
-            ("审计期间", f"{audit_context.get('period_start') or '待补充'} 至 {audit_context.get('period_end') or '待补充'}", "报告定位", "自动化凭证对财务报表科目的影响分析、证据化和底稿化"),
+            ("审计期间", f"{audit_context.get('period_start') or '待补充'} 至 {audit_context.get('period_end') or '待补充'}", "报告定位", "SAP 自动化凭证场景识别、配置验证、异常筛查和底稿化"),
         ]
         for row_idx, values in enumerate(context_rows, start=3):
             for col_idx, value in enumerate(values, start=1):
@@ -405,11 +405,11 @@ class ReportGenerator:
             if self._validation_value(row, "校验结论") not in {"", "通过"}
         )
         summary_lines = [
-            f"1. 自动分录影响金额最大的场景：{top_scenario['name']}（{top_scenario['amount']:,.2f}）。" if top_scenario else "1. 暂无可量化场景金额。",
+            f"1. 自动化凭证影响金额最大的场景：{top_scenario['name']}（{top_scenario['amount']:,.2f}）。" if top_scenario else "1. 暂无可量化场景金额。",
             f"2. 金额贡献最高的科目：{top_account['scenario']} - {top_account['account']} {top_account['description']}（{top_account['amount']:,.2f}）。" if top_account else "2. 暂无可量化科目金额。",
             f"3. 已形成 {len(di_results or [])} 条样本证据叙述，覆盖 {sum(1 for value in sample_counts.values() if value)} 个审计场景。",
             f"4. 凭证到 T030 配置验证中有 {non_pass_count} 条待补充/待核对事项，详见“异常_待补充清单”。",
-            "5. 本底稿把 SAP 自动分录配置、科目主数据、评估信息、样本凭证与审计结论串联，用于支持财务审计团队理解自动化凭证如何影响财务报表科目。",
+            "5. 本底稿把 SAP 自动化凭证配置、科目主数据、物料评估信息、样本凭证与审计结论串联，用于支持财务审计团队理解自动化凭证如何影响财务报表科目。",
         ]
         if ledger_summary:
             summary_lines.append(
@@ -451,7 +451,7 @@ class ReportGenerator:
         ws["D3"].alignment = styles["center"]
 
         base_rows = [
-            (6, "控制 / Control", f"{scenario_name} 自动分录生成逻辑"),
+            (6, "控制 / Control", f"{scenario_name} 自动化凭证生成逻辑"),
             (8, "控制说明", self._control_description(scenario_name, scenario)),
             (20, "性质 / Nature", "自动化【AUTOMATED】"),
             (22, "类型 / Type", "预防性【PREVENTIVE】"),
@@ -469,8 +469,8 @@ class ReportGenerator:
             f"PRP_{scenario_name}",
             f"{scenario_name} 自动生成凭证未按 SAP 配置计入正确财务科目。",
             "财务报表科目分类、发生额或截止可能存在错报。",
-            "T030/SKAT/T001K/MM03、样本凭证及余额/发生额数据。",
-            results[0].get("di_description") if results else "本场景已纳入测试范围框定；尚未匹配到样本凭证，需补充样本后完成 TOE。",
+            "T030/SKAT/T001K/MARC/MM03、样本凭证及余额/发生额数据。",
+            results[0].get("di_description") if results else "本场景已纳入 SAP 自动化凭证实质性测试分析；尚未匹配到样本凭证，需补充样本后完成 TOE。",
         ]
         for offset, header in enumerate(prp_headers):
             cell = ws.cell(row=17, column=4 + offset, value=header)
@@ -587,7 +587,7 @@ class ReportGenerator:
         ws.freeze_panes = "A3"
 
     def _write_valuation_sheet(self, wb, audit_context, styles):
-        ws = wb.create_sheet("T001K_MM03 评估信息")
+        ws = wb.create_sheet("T001K_MARC_MM03 评估信息")
         rows = []
         for row in audit_context.get("voucher_validation") or []:
             rows.append([
@@ -596,8 +596,9 @@ class ReportGenerator:
                 self._validation_value(row, "公司代码"),
                 self._validation_value(row, "T001K评估分组"),
                 self._validation_value(row, "物料号"),
-                self._validation_value(row, "MM03工厂"),
-                self._validation_value(row, "MM03评估分类"),
+                self._validation_value(row, "物料主数据来源"),
+                self._validation_value(row, "MARC/MM03工厂", "MM03工厂"),
+                self._validation_value(row, "MARC/MM03评估分类", "MM03评估分类"),
                 self._validation_value(row, "科目编码"),
                 self._validation_value(row, "借贷方向"),
                 self._validation_value(row, "T030期望科目"),
@@ -615,6 +616,7 @@ class ReportGenerator:
                     self._text(sample.get("MATNR")),
                     "",
                     "",
+                    "",
                     self._text(sample.get("SAKNR")),
                     self._direction_label(sample.get("SHKZG")),
                     "",
@@ -625,12 +627,12 @@ class ReportGenerator:
             ws,
             1,
             1,
-            ["凭证号", "审计场景", "公司代码", "T001K评估分组", "物料号", "MM03工厂", "MM03评估分类", "科目编码", "借贷方向", "T030期望科目", "校验结论", "校验说明"],
+            ["凭证号", "审计场景", "公司代码", "T001K评估分组", "物料号", "物料主数据来源", "MARC/MM03工厂", "MARC/MM03评估分类", "科目编码", "借贷方向", "T030期望科目", "校验结论", "校验说明"],
             rows,
             styles,
-            "T001K / MM03 / T030 评估链路核对",
+            "T001K / MARC / MM03 / T030 评估链路核对",
         )
-        self._column_widths(ws, {"A": 18, "B": 18, "C": 14, "D": 18, "E": 18, "F": 14, "G": 16, "H": 16, "I": 12, "J": 30, "K": 12, "L": 46})
+        self._column_widths(ws, {"A": 18, "B": 18, "C": 14, "D": 18, "E": 18, "F": 16, "G": 16, "H": 18, "I": 16, "J": 12, "K": 30, "L": 12, "M": 46})
         ws.freeze_panes = "A3"
 
     def _write_sample_detail_sheet(self, wb, di_results, styles):
@@ -686,9 +688,10 @@ class ReportGenerator:
         ws = wb.create_sheet("Information")
         source_rows = []
         source_specs = [
-            ("T030", "自动过账配置表", "识别自动分录规则及科目确定逻辑"),
+            ("T030", "自动过账配置表", "识别自动化凭证规则及科目确定逻辑"),
             ("SKAT", "科目主数据", "补充科目描述"),
             ("T001K", "公司代码/评估分组", "凭证公司代码定位评估分组"),
+            ("MARC", "物料主数据", "凭证物料号定位工厂与评估分类；MM03 截图仅作为补充证据"),
             ("Samples", "样本凭证清单", "生成 TOE 明细和凭证验证"),
             ("TrialBalance", "科目余额/发生额表", "量化场景金额和科目占比"),
         ]
