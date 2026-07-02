@@ -301,25 +301,43 @@ def ledger_display_dataframe(analysis_df):
 
 
 def build_ledger_coverage_summary(analysis_df):
+    empty_summary = {
+        "total_lines": 0,
+        "covered_lines": 0,
+        "exception_lines": 0,
+        "total_amount": 0.0,
+        "covered_amount": 0.0,
+        "exception_amount": 0.0,
+        "amount_coverage_pct": 0.0,
+        "total_accounts": 0,
+        "covered_accounts": 0,
+        "account_coverage_pct": 0.0,
+        "total_vouchers": 0,
+        "automated_lines": 0,
+        "automated_vouchers": 0,
+        "automated_amount": 0.0,
+        "automated_line_pct": 0.0,
+        "automated_voucher_pct": 0.0,
+        "automated_amount_pct": 0.0,
+    }
     if analysis_df is None or not hasattr(analysis_df, "empty") or analysis_df.empty:
-        return {
-            "total_lines": 0,
-            "covered_lines": 0,
-            "exception_lines": 0,
-            "total_amount": 0.0,
-            "covered_amount": 0.0,
-            "exception_amount": 0.0,
-            "amount_coverage_pct": 0.0,
-            "total_accounts": 0,
-            "covered_accounts": 0,
-            "account_coverage_pct": 0.0,
-        }
+        return empty_summary
     df = analysis_df.copy()
+    for col in ["SUBSTANTIVE_TEST_STATUS", "SCENARIO_MATCH_STATUS", "DOC_NUM", "AMT_ABS", "SAKNR_CLEAN"]:
+        if col not in df.columns:
+            df[col] = "" if col != "AMT_ABS" else 0.0
+    df["AMT_ABS"] = pd.to_numeric(df["AMT_ABS"], errors="coerce").fillna(0.0)
     completed = df["SUBSTANTIVE_TEST_STATUS"].eq("已完成实质性测试")
+    automated = df["SCENARIO_MATCH_STATUS"].eq("自动化场景已匹配")
     total_amount = float(df["AMT_ABS"].sum())
     covered_amount = float(df.loc[completed, "AMT_ABS"].sum())
+    automated_amount = float(df.loc[automated, "AMT_ABS"].sum())
     total_accounts = df["SAKNR_CLEAN"].astype(str).replace("", pd.NA).dropna().nunique()
     covered_accounts = df.loc[completed, "SAKNR_CLEAN"].astype(str).replace("", pd.NA).dropna().nunique()
+    voucher_series = df["DOC_NUM"].astype(str).str.strip().replace("", pd.NA).dropna()
+    automated_voucher_series = df.loc[automated, "DOC_NUM"].astype(str).str.strip().replace("", pd.NA).dropna()
+    total_vouchers = int(voucher_series.nunique())
+    automated_vouchers = int(automated_voucher_series.nunique())
     return {
         "total_lines": int(len(df)),
         "covered_lines": int(completed.sum()),
@@ -331,6 +349,13 @@ def build_ledger_coverage_summary(analysis_df):
         "total_accounts": int(total_accounts),
         "covered_accounts": int(covered_accounts),
         "account_coverage_pct": (covered_accounts / total_accounts * 100) if total_accounts else 0.0,
+        "total_vouchers": total_vouchers,
+        "automated_lines": int(automated.sum()),
+        "automated_vouchers": automated_vouchers,
+        "automated_amount": automated_amount,
+        "automated_line_pct": (int(automated.sum()) / len(df) * 100) if len(df) else 0.0,
+        "automated_voucher_pct": (automated_vouchers / total_vouchers * 100) if total_vouchers else 0.0,
+        "automated_amount_pct": (automated_amount / total_amount * 100) if total_amount else 0.0,
     }
 
 

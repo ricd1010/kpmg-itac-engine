@@ -85,6 +85,11 @@ def test_analyze_ledger_marks_passed_lines_as_substantive_tested():
     summary = build_ledger_coverage_summary(result)
     assert summary["covered_lines"] == 1
     assert summary["amount_coverage_pct"] == 100.0
+    assert summary["automated_lines"] == 1
+    assert summary["automated_vouchers"] == 1
+    assert summary["automated_line_pct"] == 100.0
+    assert summary["automated_voucher_pct"] == 100.0
+    assert summary["automated_amount_pct"] == 100.0
 
 
 def test_analyze_ledger_exports_unmatched_accounts_as_exceptions():

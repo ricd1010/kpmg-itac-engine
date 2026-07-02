@@ -1505,12 +1505,14 @@ def build_scenario_coverage_items(ranked, direction_filter="全部"):
     rows = []
     summary_rows = build_scenario_account_totals(ranked, direction_filter=direction_filter)
     overall_total = sum(float(row.get("total_value", 0) or 0) for row in summary_rows)
+    detail_lookup = scenario_account_detail_lookup(ranked)
     for row in summary_rows:
         amount = float(row.get("total_value", 0) or 0)
         if not amount:
             continue
         scenario_name = str(row.get("scenario", "") or "").strip()
         account_code = str(row.get("account", "") or "").strip()
+        detail = detail_lookup.get((scenario_name, account_code), {})
         subscenario_labels = subscenario_labels_for_summary_row(row, ranked)
         key_src = f"{scenario_name}|{account_code}|{';'.join(subscenario_labels)}|{direction_filter}"
         coverage_key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
@@ -1519,6 +1521,9 @@ def build_scenario_coverage_items(ranked, direction_filter="全部"):
             "流程分类": process_group_for_scenario(scenario_name),
             "审计场景": scenario_name,
             "子场景标签": "；".join(subscenario_labels),
+            "配置借贷方": str(detail.get("direction", "") or "").strip(),
+            "KTOSL": str(detail.get("ktosl", "") or "").strip(),
+            "KOMOK": str(detail.get("komok", "") or "").strip(),
             "科目编码": account_code,
             "科目描述": str(row.get("description", "") or "").strip(),
             "金额": amount,
@@ -1620,6 +1625,33 @@ def ensure_ledger_analysis_current(ranked):
     st.session_state.ledger_analysis_signature = signature
     return analysis_df
 
+def build_important_ledger_account_details(analysis_df, limit=10):
+    display_df = ledger_display_dataframe(analysis_df)
+    if display_df.empty:
+        return pd.DataFrame()
+    df = display_df.copy()
+    for col in ["场景匹配状态", "自动化场景", "科目编码", "科目描述", "借贷方向", "凭证号", "金额"]:
+        if col not in df.columns:
+            df[col] = "" if col != "金额" else 0.0
+    df["金额"] = pd.to_numeric(df["金额"], errors="coerce").fillna(0.0)
+    automated_df = df[
+        df["场景匹配状态"].astype(str).eq("自动化场景已匹配")
+        & df["自动化场景"].astype(str).str.strip().ne("")
+    ].copy()
+    if automated_df.empty:
+        return pd.DataFrame()
+    total_amount = float(automated_df["金额"].sum())
+    grouped = (
+        automated_df.groupby(["自动化场景", "科目编码", "科目描述", "借贷方向"], dropna=False, as_index=False)
+        .agg(凭证行数=("凭证号", "count"), 凭证数=("凭证号", "nunique"), 金额=("金额", "sum"))
+        .sort_values("金额", ascending=False)
+        .head(limit)
+    )
+    grouped["占自动化凭证金额"] = grouped["金额"].apply(
+        lambda value: (float(value) / total_amount * 100) if total_amount else 0.0
+    )
+    return grouped
+
 def render_full_ledger_testing_dashboard(ranked):
     if not st.session_state.get("ledger_ready"):
         st.info("如需执行报告所述的全量实质性测试覆盖，请上传全量序时账/凭证明细表。当前仍可基于科目余额/发生额表进行金额影响分析。")
@@ -1635,15 +1667,23 @@ def render_full_ledger_testing_dashboard(ranked):
     tables = build_ledger_dashboard_tables(analysis_df)
     exception_df = build_exception_ledger(analysis_df)
     display_df = ledger_display_dataframe(analysis_df)
+    important_accounts_df = build_important_ledger_account_details(analysis_df)
 
     st.markdown("### 全量 SAP 自动化凭证实质性测试覆盖")
     st.caption("基于全量序时账逐行识别自动化凭证场景，并结合公司代码、物料号、T001K、MARC/MM03 与 T030 配置判断是否可作为已完成实质性测试覆盖。")
-    metric_cols = st.columns(5)
+    metric_cols = st.columns(6)
     metric_cols[0].metric("凭证行数", f"{summary['total_lines']:,}")
-    metric_cols[1].metric("已覆盖行数", f"{summary['covered_lines']:,}")
-    metric_cols[2].metric("金额覆盖率", f"{summary['amount_coverage_pct']:.2f}%")
-    metric_cols[3].metric("科目覆盖率", f"{summary['account_coverage_pct']:.2f}%")
-    metric_cols[4].metric("异常/未覆盖行数", f"{summary['exception_lines']:,}")
+    metric_cols[1].metric("自动化凭证行数", f"{summary['automated_lines']:,}")
+    metric_cols[2].metric("自动化行数占比", f"{summary['automated_line_pct']:.2f}%")
+    metric_cols[3].metric("自动化凭证号数", f"{summary['automated_vouchers']:,}")
+    metric_cols[4].metric("金额覆盖率", f"{summary['amount_coverage_pct']:.2f}%")
+    metric_cols[5].metric("异常/未覆盖行数", f"{summary['exception_lines']:,}")
+
+    second_metric_cols = st.columns(4)
+    second_metric_cols[0].metric("全量凭证号数", f"{summary['total_vouchers']:,}")
+    second_metric_cols[1].metric("自动化凭证号占比", f"{summary['automated_voucher_pct']:.2f}%")
+    second_metric_cols[2].metric("自动化凭证金额", f"{summary['automated_amount']:,.2f}")
+    second_metric_cols[3].metric("自动化金额占比", f"{summary['automated_amount_pct']:.2f}%")
 
     if summary["amount_coverage_pct"] >= 90:
         st.success("全量凭证明细中已有 90% 以上金额可落入自动化凭证实质性测试覆盖。")
@@ -1665,6 +1705,15 @@ def render_full_ledger_testing_dashboard(ranked):
             exception_display = exception_table.copy()
             exception_display["金额"] = exception_display["金额"].map(lambda value: f"{float(value):,.2f}")
             st.dataframe(exception_display, width="stretch", hide_index=True)
+
+    if not important_accounts_df.empty:
+        st.markdown("**重要账户明细 Top 10（自动化凭证）**")
+        important_display = important_accounts_df.copy()
+        important_display["金额"] = important_display["金额"].map(lambda value: f"{float(value):,.2f}")
+        important_display["占自动化凭证金额"] = important_display["占自动化凭证金额"].map(lambda value: f"{float(value):.2f}%")
+        st.dataframe(important_display, width="stretch", hide_index=True)
+    else:
+        st.info("当前全量序时账中尚未形成可汇总的重要自动化凭证账户明细。")
 
     export_cols = st.columns([1.1, 1.1, 2.8])
     with export_cols[0]:
@@ -1920,7 +1969,7 @@ def render_testing_coverage_dashboard(ranked):
     editor_df["占场景"] = editor_df["占场景"].round(2)
     editor_cols = [
         "纳入审计覆盖", "覆盖项ID", "流程分类", "审计场景", "子场景标签",
-        "科目编码", "科目描述", "金额", "占整体", "占场景", "命中公司数",
+        "配置借贷方", "KTOSL", "KOMOK", "科目编码", "科目描述", "金额", "占整体", "占场景", "命中公司数",
     ]
     edited_df = st.data_editor(
         editor_df[editor_cols],
@@ -2007,7 +2056,7 @@ def render_testing_coverage_dashboard(ranked):
             unsafe_allow_html=True,
         )
         if not selected_df.empty:
-            selected_brief = selected_df[["审计场景", "子场景标签", "科目编码", "占整体"]].copy()
+            selected_brief = selected_df[["审计场景", "子场景标签", "配置借贷方", "科目编码", "占整体"]].copy()
             selected_brief["占整体"] = selected_brief["占整体"].map(lambda value: f"{float(value):.2f}%")
             st.dataframe(selected_brief.head(8), width="stretch", hide_index=True)
 
@@ -2020,7 +2069,7 @@ def render_testing_coverage_dashboard(ranked):
             st.caption("以下项目尚未纳入审计覆盖，可优先补选以满足最低风险覆盖要求。")
         else:
             st.caption("已达到当前覆盖要求；下列项目为尚未纳入审计覆盖的剩余重大项目。")
-        unselected_cols = ["流程分类", "审计场景", "子场景标签", "科目编码", "科目描述", "金额", "占整体", "占场景"]
+        unselected_cols = ["流程分类", "审计场景", "子场景标签", "配置借贷方", "KTOSL", "KOMOK", "科目编码", "科目描述", "金额", "占整体", "占场景"]
         unselected_display = unselected_display[unselected_cols]
         unselected_display["金额"] = unselected_display["金额"].map(lambda value: f"{float(value):,.2f}")
         unselected_display["占整体"] = unselected_display["占整体"].map(lambda value: f"{float(value):.2f}%")
@@ -2050,6 +2099,9 @@ def build_audit_dashboard_rows(ranked):
                     "审计场景": scenario_name,
                     "公司代码": company_code,
                     "子场景标签": "；".join(subscenario_labels_for_detail(scenario_name, account_code, description, detail)),
+                    "配置借贷方": str(detail.get("direction", "") or "").strip(),
+                    "KTOSL": str(detail.get("ktosl", "") or "").strip(),
+                    "KOMOK": str(detail.get("komok", "") or "").strip(),
                     "科目编码": account_code,
                     "科目描述": description,
                     "借方金额": debit_value,
@@ -2072,6 +2124,10 @@ def build_config_mapping_rows(ranked):
                 "科目编码": account_code,
                 "科目描述": description,
                 "配置借贷方": str(detail.get("direction", "") or "").strip(),
+                "KTOSL": str(detail.get("ktosl", "") or "").strip(),
+                "KOMOK": str(detail.get("komok", "") or "").strip(),
+                "评估分组": str(detail.get("bwmod", "") or "").strip(),
+                "评估类": str(detail.get("bklas", "") or "").strip(),
                 "匹配状态": "未匹配科目名称" if "未知科目" in str(detail.get("description", "")) else "已匹配",
             })
         if not scenario.get("account_details"):
@@ -2084,6 +2140,10 @@ def build_config_mapping_rows(ranked):
                     "科目编码": account_text.split(" ")[0],
                     "科目描述": account_text,
                     "配置借贷方": "",
+                    "KTOSL": "",
+                    "KOMOK": "",
+                    "评估分组": "",
+                    "评估类": "",
                     "匹配状态": "未匹配科目名称" if "未知科目" in account_text else "已匹配",
                 })
     return pd.DataFrame(rows)
@@ -2210,10 +2270,10 @@ def render_general_audit_dashboard(ranked):
             filtered = filtered[filtered["合计金额"].abs() >= float(min_amount)]
 
         available_columns = [
-            "流程分类", "审计场景", "子场景标签", "公司代码", "科目编码", "科目描述",
+            "流程分类", "审计场景", "子场景标签", "配置借贷方", "KTOSL", "KOMOK", "公司代码", "科目编码", "科目描述",
             "合计金额", "借方金额", "贷方金额",
         ]
-        default_columns = ["审计场景", "子场景标签", "公司代码", "科目编码", "科目描述", "合计金额"]
+        default_columns = ["审计场景", "子场景标签", "配置借贷方", "公司代码", "科目编码", "科目描述", "合计金额"]
         selected_columns = st.multiselect(
             "显示字段",
             available_columns,

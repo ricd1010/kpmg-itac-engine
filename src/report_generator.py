@@ -382,6 +382,7 @@ class ReportGenerator:
             ("场景归集金额", sum(item["amount"] for item in scenario_totals)),
             ("命中科目记录", len(account_rows)),
             ("全量凭证金额覆盖率", f"{self._num(ledger_summary.get('amount_coverage_pct')):.2f}%" if ledger_summary else "待上传全量序时账"),
+            ("自动化凭证占比", f"{self._num(ledger_summary.get('automated_line_pct')):.2f}%" if ledger_summary else "待上传全量序时账"),
         ]
         ws["A6"] = "关键审计指标"
         ws["A6"].font = styles["section_font"]
@@ -416,6 +417,12 @@ class ReportGenerator:
                 f"6. 全量序时账覆盖：共 {int(self._num(ledger_summary.get('total_lines'))):,} 行，"
                 f"已覆盖 {int(self._num(ledger_summary.get('covered_lines'))):,} 行，"
                 f"金额覆盖率 {self._num(ledger_summary.get('amount_coverage_pct')):.2f}%。"
+            )
+            summary_lines.append(
+                f"7. 自动化凭证识别：共识别 {int(self._num(ledger_summary.get('automated_lines'))):,} 行、"
+                f"{int(self._num(ledger_summary.get('automated_vouchers'))):,} 个凭证号，"
+                f"行数占比 {self._num(ledger_summary.get('automated_line_pct')):.2f}%，"
+                f"凭证号占比 {self._num(ledger_summary.get('automated_voucher_pct')):.2f}%。"
             )
         ws["A11"] = "审计价值摘要"
         ws["A11"].font = styles["section_font"]
