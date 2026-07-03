@@ -3257,15 +3257,6 @@ elif st.session_state.current_step == 3:
     st.caption("本步骤仅使用第一步项目资料包中已识别的文件，不再提供补充上传或样本编辑入口。")
     render_project_folder_status()
 
-    with st.expander("查看项目资料包自动识别结果", expanded=True):
-        manifest = st.session_state.get("project_folder_manifest") or []
-        if manifest:
-            manifest_df = pd.DataFrame(manifest)
-            display_cols = [col for col in ["文件", "识别类型", "状态", "原因"] if col in manifest_df.columns]
-            st.dataframe(manifest_df[display_cols] if display_cols else manifest_df, width="stretch", hide_index=True)
-        else:
-            st.warning("未发现第一步项目资料包识别结果。请返回第一步选择项目文件夹后再进入本步骤。")
-
     ensure_scenario_preview_current()
     ledger_analysis_df = render_full_ledger_testing_dashboard(st.session_state.scenario_preview)
     if ledger_analysis_df.empty:
