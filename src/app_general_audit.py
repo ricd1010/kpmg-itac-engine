@@ -1785,25 +1785,6 @@ def build_account_quantity_coverage(ranked, trial_balance_df):
         "unmatched_account_codes": sorted(unmatched_accounts),
     }
 
-def render_account_quantity_coverage(ranked):
-    tb_df = load_session_table("TrialBalance")
-    coverage = build_account_quantity_coverage(ranked, tb_df)
-    if not coverage:
-        return
-
-    st.markdown("### 自动化凭证科目识别看板")
-    st.caption("以科目余额/发生额表中的唯一科目为基数，统计有多少科目已经落入 SAP 自动化凭证场景库。目标用于辅助判断自动凭证测试覆盖面，不替代审计判断。")
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("科余表科目数", f"{coverage['total_accounts']}")
-    metric_cols[1].metric("命中规定场景科目", f"{coverage['matched_accounts']}")
-    metric_cols[2].metric("数量占比", f"{coverage['coverage_pct']:.2f}%")
-    metric_cols[3].metric("未命中科目", f"{coverage['unmatched_accounts']}")
-
-    if coverage["coverage_pct"] >= 90:
-        st.success("已识别出 90% 以上客户科目与当前自动化凭证场景的关系，可进入样本覆盖范围筛选。")
-    else:
-        st.warning("当前科目数量覆盖率低于 90%。可补充固定资产、税费、人工、费用分摊等场景规则，或检查客户科目描述和配置表完整性。")
-
 def automation_account_count(ranked):
     accounts = set()
     for scenario in ranked or []:
@@ -2506,150 +2487,6 @@ def build_config_mapping_rows(ranked):
                 })
     return pd.DataFrame(rows)
 
-def render_general_audit_dashboard(ranked):
-    dashboard_df = build_audit_dashboard_rows(ranked)
-    if dashboard_df.empty:
-        mapping_df = build_config_mapping_rows(ranked)
-        scenario_count = len(ranked or [])
-        account_count = int(len(mapping_df)) if not mapping_df.empty else 0
-        unmatched_count = int((mapping_df["匹配状态"] == "未匹配科目名称").sum()) if not mapping_df.empty else 0
-        matched_count = max(account_count - unmatched_count, 0)
-
-        st.markdown("### 智审 V.A.S.T. 审计价值 Dashboard")
-        st.caption("已完成 SAP 自动化凭证配置到财务科目的映射。上传科目余额/发生额表后，将进一步量化各场景对财务报表科目的影响。")
-        metric_cols = st.columns(4)
-        metric_cols[0].metric("识别业务场景", f"{scenario_count}")
-        metric_cols[1].metric("配置关联科目", f"{account_count}")
-        metric_cols[2].metric("已匹配科目名称", f"{matched_count}")
-        metric_cols[3].metric("待补充科目名称", f"{unmatched_count}")
-
-        st.info(
-            "审计价值摘要：当前已把 SAP 自动过账配置转化为可审计的业务场景与财务科目清单。"
-            "下一步补充金额表后，系统会自动生成场景金额排行、重点科目贡献、科目数量覆盖率和抽样覆盖建议。"
-        )
-
-        if not mapping_df.empty:
-            filter_cols = st.columns([1.4, 1])
-            selected_scenarios = filter_cols[0].multiselect(
-                "审计场景",
-                sorted(mapping_df["审计场景"].dropna().unique()),
-                default=[],
-                placeholder="全部场景",
-            )
-            unmatched_only = filter_cols[1].checkbox("只看待补充科目名称")
-            filtered_mapping = mapping_df.copy()
-            if selected_scenarios:
-                filtered_mapping = filtered_mapping[filtered_mapping["审计场景"].isin(selected_scenarios)]
-            if unmatched_only:
-                filtered_mapping = filtered_mapping[filtered_mapping["匹配状态"] == "未匹配科目名称"]
-            st.markdown("**配置映射预览**")
-            st.dataframe(filtered_mapping, width="stretch", hide_index=True)
-
-        with st.expander("技术明细：查看底层配置映射表", expanded=False):
-            render_scenario_preview(ranked, show_amount=False)
-        return
-
-    st.markdown("### 智审 V.A.S.T. 审计价值 Dashboard")
-    st.caption("从财务审计视角查看 SAP 自动化凭证对业务场景、公司和财务科目的影响；需要追溯时再展开底层配置与明细。")
-
-    total_amount = float(dashboard_df["合计金额"].sum())
-    scenario_count = int(dashboard_df["审计场景"].nunique())
-    company_count = int(dashboard_df["公司代码"].nunique())
-    account_count = int(dashboard_df["科目编码"].nunique())
-
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("覆盖审计场景", f"{scenario_count}")
-    metric_cols[1].metric("涉及公司", f"{company_count}")
-    metric_cols[2].metric("命中科目", f"{account_count}")
-    metric_cols[3].metric("归集金额", f"{total_amount:,.2f}")
-
-    scenario_totals = (
-        dashboard_df.groupby("审计场景", as_index=False)["合计金额"]
-        .sum()
-        .sort_values("合计金额", ascending=False)
-    )
-    top_scenario = scenario_totals.iloc[0]
-    top_accounts = (
-        dashboard_df.groupby(["审计场景", "科目编码", "科目描述"], as_index=False)["合计金额"]
-        .sum()
-        .sort_values("合计金额", ascending=False)
-        .head(5)
-    )
-    concentrated_companies = (
-        dashboard_df.groupby("公司代码", as_index=False)["合计金额"]
-        .sum()
-        .sort_values("合计金额", ascending=False)
-        .head(3)
-    )
-    sample_focus = top_accounts.head(3).apply(
-        lambda row: f"{row['审计场景']} - {row['科目编码']} {row['科目描述']}",
-        axis=1,
-    ).tolist()
-
-    summary_lines = [
-        f"金额影响最大的场景是 **{top_scenario['审计场景']}**，归集金额 **{float(top_scenario['合计金额']):,.2f}**。",
-        f"金额贡献最高的科目是 **{top_accounts.iloc[0]['科目编码']} {top_accounts.iloc[0]['科目描述']}**，建议优先纳入样本覆盖。",
-    ]
-    if not concentrated_companies.empty:
-        company_text = "、".join(f"{row['公司代码']}（{float(row['合计金额']):,.2f}）" for _, row in concentrated_companies.iterrows())
-        summary_lines.append(f"自动化凭证金额较集中的公司包括：**{company_text}**，建议结合样本覆盖情况安排穿行测试。")
-    if sample_focus:
-        summary_lines.append("建议优先抽样对象：" + "；".join(sample_focus[:3]) + "。")
-
-    st.markdown("**审计价值摘要**")
-    st.info("\n\n".join(summary_lines))
-
-    render_testing_coverage_dashboard(ranked)
-
-    with st.expander("原始审计影响明细（可选）", expanded=False):
-        filter_cols = st.columns([1.3, 1.3, 1])
-        selected_scenarios = filter_cols[0].multiselect(
-            "审计场景",
-            sorted(dashboard_df["审计场景"].dropna().unique()),
-            default=[],
-            placeholder="全部场景",
-            key="raw_detail_scenarios",
-        )
-        selected_companies = filter_cols[1].multiselect(
-            "公司代码",
-            sorted(dashboard_df["公司代码"].dropna().unique()),
-            default=[],
-            placeholder="全部公司",
-            key="raw_detail_companies",
-        )
-        min_amount = filter_cols[2].number_input("金额阈值", min_value=0.0, value=0.0, step=10000.0, key="raw_detail_min_amount")
-
-        filtered = dashboard_df.copy()
-        if selected_scenarios:
-            filtered = filtered[filtered["审计场景"].isin(selected_scenarios)]
-        if selected_companies:
-            filtered = filtered[filtered["公司代码"].isin(selected_companies)]
-        if min_amount:
-            filtered = filtered[filtered["合计金额"].abs() >= float(min_amount)]
-
-        available_columns = [
-            "流程分类", "审计场景", "子场景标签", "配置借贷方", "KTOSL", "KOMOK", "公司代码", "科目编码", "科目描述",
-            "合计金额", "借方金额", "贷方金额",
-        ]
-        default_columns = ["审计场景", "子场景标签", "配置借贷方", "公司代码", "科目编码", "科目描述", "合计金额"]
-        selected_columns = st.multiselect(
-            "显示字段",
-            available_columns,
-            default=default_columns,
-            key="raw_detail_columns",
-        )
-        if not selected_columns:
-            selected_columns = default_columns
-
-        display_df = filtered[selected_columns].copy()
-        for amount_col in ["合计金额", "借方金额", "贷方金额"]:
-            if amount_col in display_df.columns:
-                display_df[amount_col] = display_df[amount_col].map(lambda value: f"{float(value):,.2f}")
-        st.dataframe(display_df, width="stretch", hide_index=True)
-
-    with st.expander("技术明细：配置映射、公司维度金额和借贷拆分", expanded=False):
-        render_scenario_preview(ranked, show_amount=True)
-
 def render_scenario_preview(ranked, show_amount=False):
     if not ranked:
         st.warning("尚未识别到场景，请检查 T030 配置表。")
@@ -3249,8 +3086,6 @@ if st.session_state.results:
     with t1:
         st.subheader("SAP 自动化凭证全量实质性测试覆盖")
         if res["ranked"]:
-            render_general_audit_dashboard(res["ranked"])
-            st.write("---")
             render_scenario_preview(res["ranked"], show_amount=True)
     with t2:
         st.subheader("自动化凭证 TOD/TOE 样本证据描述")
