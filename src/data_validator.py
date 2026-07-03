@@ -326,18 +326,25 @@ class DataValidator:
         common_mapping = {
             "COMPANY_CODE": ["company_code", "bukrs", "公司代码", "公司编码", "公司", "Company Code", "buchungskreis", "bukr", "CoCd"],
             "SAKNR": ["saknr", "总账科目", "总帐科目", "G/L Account", "科目", "sachkonto", "hauptbuchkonto"],
-            "TXT50": ["txt50", "科目描述", "科目名称", "短文本", "总分类帐名称", "kurztext", "bezeichnung"],
+            "TXT50": ["txt50", "G/L Account Name", "gl account name", "account name", "account description", "科目描述", "科目名称", "短文本", "总分类帐名称", "kurztext", "bezeichnung"],
             "DMBTR_DEBIT": ["dmbtr_debit", "借方金额", "在制表期间的借方余额", "已结转余额", "借方", "前一期间的余额"],
             "DMBTR_CREDIT": ["dmbtr_credit", "贷方金额", "报表期间的贷方余额", "累计余额", "贷方"],
             "DOC_NUM": ["doc_num", "凭证号", "会计凭证", "采购凭证", "开票凭证", "订单", "记账代码", "记帐代码", "belegnummer", "document number"],
             "DATE": ["date", "日期", "过账日期", "buchungsdatum", "posting date"],
-            "AMOUNT": ["amount", "金额", "交易金额", "betrag"],
+            "AMOUNT": ["amount in local currency", "amount in document currency", "local currency amount", "document currency amount", "amount", "金额", "交易金额", "betrag"],
             "SHKZG": ["shkzg", "借/贷标识", "S/H", "soll/haben", "debit/credit"],
             "SCENARIO": ["scenario", "audit_scenario", "审计场景", "场景", "目标场景", "测试场景"],
             "KTOSL": ["ktosl", "事务", "交易变式", "事务码", "TRS", "vorgang"],
             "KOMOK": ["komok", "科目修改", "修改码", "AM", "kontomodifikation"],
             "MATNR": ["matnr", "物料", "物料号", "物料编码", "物料编号", "物料代码", "Material", "materialnummer"],
             "WERKS": ["werks", "plant", "factory", "工厂", "工厂编号", "工厂代码", "valuation area", "bwkey", "werk"],
+            "SCENARIO_L1": ["scenario l1", "scenario_l1", "module scenario", "scenario module", "流程分类", "模块场景"],
+            "SCENARIO_L2": ["scenario l2", "scenario_l2", "sub scenario", "subscenario", "子场景", "细分场景"],
+            "CONFIG_COVERED_FLAG": ["config covered flag", "config_covered_flag", "covered flag", "是否覆盖", "配置覆盖"],
+            "SPA_TEST_POINT": ["spa test point", "spa_test_point", "test point", "测试点"],
+            "T030_CONFIG_ROW_ID": ["t030 config row id", "config row id", "配置行"],
+            "T030_VALUATION_GROUP": ["t030 valuation group", "valuation group", "valuation grouping", "评估分组"],
+            "T030_VALUATION_CLASS": ["t030 valuation class", "valuation class", "valcl", "评估类", "评估分类"],
         }
         if file_type == "T030":
             mapping = {
@@ -391,7 +398,7 @@ class DataValidator:
                     a_str = str(actual).lower()
                     al_str = alias.lower()
                     exact_match = al_str == a_str
-                    contains_match = al_str not in {"科目"} and al_str in a_str
+                    contains_match = al_str not in {"科目", "scenario"} and al_str in a_str
                     if exact_match or contains_match:
                         new_columns[idx] = target
                         used_indices.add(idx)

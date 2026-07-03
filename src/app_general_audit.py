@@ -44,7 +44,7 @@ KPMG_TEAL = "#00A3A1"
 KPMG_DARK_GREY = "#1A1A1A"
 KPMG_LIGHT_GREY = "#F7F9FC"
 SCENARIO_PREVIEW_SCHEMA_VERSION = 17
-PROJECT_CLASSIFIER_VERSION = "2026-07-02-vast-sap-marc-v1"
+PROJECT_CLASSIFIER_VERSION = "2026-07-03-step3-ledger-schema-v1"
 SYSTEM_VERSION_OPTIONS = ["SAP ECC", "SAP S/4 HANA"]
 AUTO_SCENARIO_LABEL = "自动识别"
 PRODUCT_NAME = "智审 V.A.S.T. 自动化凭证审计看板"
@@ -574,6 +574,57 @@ def project_preferred_type_from_filename(name):
             return file_type
     return ""
 
+def project_schema_type_from_columns(uploaded_file):
+    """Use the file header before the filename, so T030-named ledgers stay ledgers."""
+    try:
+        uploaded_file.seek(0)
+        raw = uploaded_file.read()
+        uploaded_file.seek(0)
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        frames = []
+        suffix = os.path.splitext(project_upload_basename(uploaded_file).lower())[1]
+        if suffix in {".xlsx", ".xls"}:
+            for engine in ["openpyxl", "xlrd"]:
+                try:
+                    frames.append(pd.read_excel(io.BytesIO(raw), sheet_name=0, nrows=8, dtype=str, engine=engine))
+                    break
+                except Exception:
+                    continue
+        else:
+            for enc in DataValidator.TEXT_ENCODINGS:
+                try:
+                    frames.append(pd.read_csv(io.BytesIO(raw), nrows=8, dtype=str, encoding=enc, sep=None, engine="python"))
+                    break
+                except Exception:
+                    continue
+        if not frames:
+            return "", ""
+        columns = {re.sub(r"[^a-z0-9]+", " ", str(col).strip().lower()).strip() for col in frames[0].columns}
+        joined = " | ".join(sorted(columns))
+        has_ledger_core = (
+            ("document number" in joined or "doc num" in joined or "会计凭证" in joined or "凭证号" in joined)
+            and ("g l account" in joined or "saknr" in joined or "总账科目" in joined)
+            and ("amount" in joined or "金额" in joined)
+        )
+        has_coverage_scenario = "scenario l1" in joined and "scenario l2" in joined
+        if has_ledger_core and (has_coverage_scenario or "config covered flag" in joined or "t030 transaction key" in joined):
+            return "Ledger", "字段包含全量序时账/覆盖清单核心列，优先按全量序时账识别。"
+        if has_ledger_core:
+            return "Ledger", "字段包含凭证号、科目和金额，优先按全量序时账识别。"
+        has_trial_balance = (
+            ("dmbtr debit" in joined or "debit amount" in joined or "本月借方" in joined or "借方发生额" in joined)
+            and ("g l account" in joined or "saknr" in joined or "总账科目" in joined or "科目编码" in joined)
+        )
+        if has_trial_balance:
+            return "TrialBalance", "字段包含科目余额/发生额核心列，优先按余额/发生额表识别。"
+    except Exception:
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
+    return "", ""
+
 def project_candidate_block_reason(name, file_type):
     text = str(name or "").lower()
     has_tb_hint = any(keyword.lower() in text for keyword in TRIAL_BALANCE_NAME_HINTS)
@@ -666,8 +717,12 @@ def classify_project_upload(uploaded_file):
             "size": size,
         }
 
-    preferred_type = project_preferred_type_from_filename(display_name)
-    candidate_types = [preferred_type] if preferred_type else PROJECT_SPREADSHEET_TYPES
+    schema_type, schema_reason = project_schema_type_from_columns(uploaded_file)
+    preferred_type = schema_type or project_preferred_type_from_filename(display_name)
+    if schema_type:
+        candidate_types = [schema_type] + [file_type for file_type in PROJECT_SPREADSHEET_TYPES if file_type != schema_type]
+    else:
+        candidate_types = [preferred_type] if preferred_type else PROJECT_SPREADSHEET_TYPES
     candidates = [project_validate_candidate(uploaded_file, file_type) for file_type in candidate_types]
     valid_candidates = [item for item in candidates if item["valid"]]
     if preferred_type and not valid_candidates:
@@ -689,7 +744,9 @@ def classify_project_upload(uploaded_file):
         }
 
     valid_by_type = {item["file_type"]: item for item in valid_candidates}
-    if "TrialBalance" in valid_by_type and preferred_type in {"", "TrialBalance"}:
+    if schema_type and schema_type in valid_by_type:
+        chosen = valid_by_type[schema_type]
+    elif "TrialBalance" in valid_by_type and preferred_type in {"", "TrialBalance"}:
         chosen = valid_by_type["TrialBalance"]
     else:
         preferred_candidates = [item for item in valid_candidates if item["file_type"] == preferred_type]
@@ -699,7 +756,7 @@ def classify_project_upload(uploaded_file):
         "识别类型": PROJECT_TYPE_LABELS[chosen["file_type"]],
         "detected_type": chosen["file_type"],
         "状态": "可加载",
-        "原因": f"字段校验通过；{chosen['rows']} 行，{chosen['columns']} 列",
+        "原因": f"{schema_reason or '字段校验通过'}；{chosen['rows']} 行，{chosen['columns']} 列",
         "confidence": round(float(chosen["score"]), 2),
         "size": size,
     }
@@ -1127,6 +1184,33 @@ def clean_account_code(val):
 def scenario_names_from_preview():
     return [str(row.get("name")) for row in st.session_state.scenario_preview if row.get("name")]
 
+SCENARIO_FILENAME_HINTS = {
+    "销售发货": ["销售发货", "发货", "出库", "delivery", "gi", "giss"],
+    "销售发票校验": ["销售发票", "销售入账", "开票", "billing", "invoice", "vf01"],
+    "销售成本结转": ["销售成本", "成本结转", "cogs"],
+    "收款核销": ["收款", "核销", "清账", "incoming payment"],
+    "采购收货": ["采购收货", "收货", "入库", "gr", "goods receipt", "migo"],
+    "采购发票校验": ["采购发票", "采购入账", "发票校验", "miro", "invoice verification"],
+    "生产领料": ["生产领料", "领料", "发料", "goods issue", "gi production"],
+    "完工入库": ["完工入库", "完工", "生产入库", "confirmation", "receipt from production"],
+    "工单差异": ["工单差异", "生产差异", "order variance", "prd"],
+    "产成品差异": ["产成品差异", "物料转物料", "成品差异", "finished goods variance"],
+    "固定资产折旧": ["折旧", "固定资产", "depreciation"],
+}
+
+def infer_scenario_from_source_file(source_file, scenario_options):
+    name_text = str(source_file or "").strip().lower()
+    if not name_text:
+        return ""
+    allowed = set(scenario_options or [])
+    matches = []
+    for scenario_name, hints in SCENARIO_FILENAME_HINTS.items():
+        if scenario_name not in allowed:
+            continue
+        if any(str(hint).lower() in name_text for hint in hints):
+            matches.append(scenario_name)
+    return matches[0] if len(matches) == 1 else ""
+
 def scenario_account_lookup(ranked):
     lookup = {}
     for scenario in ranked or []:
@@ -1309,7 +1393,14 @@ def render_sample_source_scenario_controls(records, scenario_options):
     columns = st.columns(min(3, max(1, len(groups))))
     changed = False
     for idx, (key, info) in enumerate(sorted(groups.items(), key=lambda item: item[1]["source_file"])):
-        existing = st.session_state.sample_source_scenarios.get(key) or infer_source_scenario(info["records"], scenario_options)
+        inferred = (
+            infer_source_scenario(info["records"], scenario_options)
+            or infer_scenario_from_source_file(info["source_file"], scenario_options)
+        )
+        if key not in st.session_state.sample_source_scenarios and inferred:
+            st.session_state.sample_source_scenarios[key] = inferred
+            changed = True
+        existing = st.session_state.sample_source_scenarios.get(key) or inferred
         options = [placeholder] + list(scenario_options)
         index = options.index(existing) if existing in options else 0
         digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
@@ -1371,6 +1462,24 @@ SCENARIO_PROCESS_GROUPS = {
     "固定资产折旧": "固定资产与折旧",
 }
 
+CORE_AC_SCENARIOS = [
+    "销售发货",
+    "销售发票校验",
+    "销售成本结转",
+    "收款核销",
+    "采购收货",
+    "采购发票校验",
+    "生产领料",
+    "完工入库",
+    "工单差异",
+    "产成品差异",
+]
+
+AC_SCENARIO_NUMBERS = {
+    scenario_name: f"AC{idx:02d}"
+    for idx, scenario_name in enumerate(CORE_AC_SCENARIOS, start=1)
+}
+
 def process_group_for_scenario(scenario_name):
     return SCENARIO_PROCESS_GROUPS.get(str(scenario_name or "").strip(), "其他")
 
@@ -1396,92 +1505,102 @@ def scenario_account_detail_lookup(ranked):
                 lookup[(scenario_name, account_code)] = detail
     return lookup
 
-def subscenario_labels_for_detail(scenario_name, account_code="", description="", detail=None):
+def inventory_category_label(account_code="", description="", suffix=""):
+    account_code = str(account_code or "").strip()
+    text = f"{account_code} {description or ''}"
+    if "半成品" in text or account_code.startswith(("1409", "500102")):
+        return f"半成品{suffix}"
+    if any(word in text for word in ["库存商品", "产成品", "自制成品", "外购成品"]) or account_code.startswith(("1405", "500103")):
+        return f"产成品{suffix}"
+    if any(word in text for word in ["包装物", "周转材料"]) or account_code.startswith(("1410", "1411")):
+        return f"包装物/周转材料{suffix}"
+    if any(word in text for word in ["原材料", "原辅料", "材料"]) or account_code.startswith(("1403", "500101", "801705")):
+        return f"原辅料{suffix}"
+    return f"存货{suffix}"
+
+def single_subscenario_label_for_detail(scenario_name, account_code="", description="", detail=None):
     scenario_name = str(scenario_name or "").strip()
     account_code = str(account_code or "").strip()
     description = str(description or "").strip()
     detail = detail or {}
     ktosl_values = {item.upper() for item in split_meta_values(detail.get("ktosl"))}
     komok_values = {item.upper() for item in split_meta_values(detail.get("komok"))}
-    labels = []
-
-    def add(label):
-        if label and label not in labels:
-            labels.append(label)
 
     if scenario_name == "销售发货":
-        if {"VAX", "VAY"} & komok_values or "GBB" in ktosl_values:
-            add("销售发货成本过账")
         if "GISS" in ktosl_values:
-            add("销售发货消耗")
+            return "销售发货消耗"
+        if {"VAX", "VAY"} & komok_values or "GBB" in ktosl_values:
+            return "销售发货成本过账"
     elif scenario_name == "销售发票校验":
         if "REV" in ktosl_values:
-            add("收入确认")
+            return "收入确认"
         if "MWS" in ktosl_values:
-            add("销项税确认")
+            return "销项税确认"
         if "AKTY" in ktosl_values:
-            add("销售应收/暂估")
+            return "销售应收/暂估"
     elif scenario_name == "销售成本结转":
         if {"VAX", "VAY"} & komok_values or "GBB" in ktosl_values:
-            add("销售成本结转")
+            return "销售成本结转"
     elif scenario_name == "收款核销":
-        add("收款清账")
+        return "收款清账"
     elif scenario_name == "采购收货":
         if "WRX" in ktosl_values or "GR/IR" in description.upper():
-            add("GR/IR 暂估")
+            return "GR/IR 暂估"
         if "BSX" in ktosl_values or any(word in description for word in ["原材料", "库存商品", "半成品", "包装物", "周转材料"]):
-            add("存货入库")
+            return inventory_category_label(account_code, description, "采购入库")
     elif scenario_name == "采购发票校验":
         if "WRX" in ktosl_values or "GR/IR" in description.upper():
-            add("GR/IR 清账")
+            return "GR/IR 清账"
         if "VST" in ktosl_values or "进项" in description:
-            add("进项税确认")
+            return "进项税确认"
         if "AKTP" in ktosl_values or "应付" in description:
-            add("应付入账")
+            return "应付入账"
     elif scenario_name == "生产领料":
         if {"VBO", "VBR"} & komok_values or "GBB" in ktosl_values:
-            add("生产领料消耗")
+            return inventory_category_label(account_code, description, "生产领用")
         if "BSX" in ktosl_values:
-            add("库存转出")
+            return inventory_category_label(account_code, description, "库存转出")
     elif scenario_name == "完工入库":
         if "AUF" in komok_values or account_code.startswith(("500108", "500109")):
-            add("生产成本完工转出")
+            return "生产成本完工转出"
         if "BSX" in ktosl_values or any(word in description for word in ["库存商品", "半成品"]):
-            add("产成品/半成品入库")
+            if "半成品" in description or account_code.startswith("1409"):
+                return "半成品完工入库"
+            return "产成品完工入库"
     elif scenario_name == "工单差异":
         if "PRD" in ktosl_values:
             if "采购" in description:
-                add("采购差异")
+                return "采购差异"
             if "转物料" in description or "物料转" in description:
-                add("物料转物料差异")
+                return "物料转物料差异"
             if "跨工厂" in description:
-                add("跨工厂转移差异")
+                return "跨工厂转移差异"
             if "产出" in description:
-                add("产出差异")
-            add("工单差异")
+                return "产出差异"
+            return "工单差异"
         if "AUF" in komok_values:
-            add("完工结转差异")
+            return "完工结转差异"
     elif scenario_name == "产成品差异":
         if "UMSK" in ktosl_values or "转物料" in description or "物料转" in description:
-            add("物料转物料差异")
+            return "物料转物料差异"
         if "PRA" in komok_values:
-            add("产成品采购差异")
+            return "产成品采购差异"
     elif scenario_name == "固定资产折旧":
         if "累计折旧" in description or account_code.startswith("1602"):
-            add("累计折旧")
-        else:
-            add("折旧费用")
+            return "累计折旧"
+        return "折旧费用"
 
-    if not labels and detail:
+    if detail:
         ktosl_text = " / ".join(split_meta_values(detail.get("ktosl")))
         komok_text = " / ".join(split_meta_values(detail.get("komok")))
         if ktosl_text and komok_text:
-            add(f"{ktosl_text}-{komok_text}")
+            return f"{ktosl_text}-{komok_text}"
         elif ktosl_text:
-            add(ktosl_text)
-    if not labels:
-        add(scenario_name or "未分类子场景")
-    return labels
+            return ktosl_text
+    return scenario_name or "未分类子场景"
+
+def subscenario_labels_for_detail(scenario_name, account_code="", description="", detail=None):
+    return [single_subscenario_label_for_detail(scenario_name, account_code, description, detail)]
 
 def subscenario_labels_for_summary_row(summary_row, ranked):
     detail = scenario_account_detail_lookup(ranked).get((
@@ -1531,6 +1650,157 @@ def build_scenario_coverage_items(ranked, direction_filter="全部"):
             "占场景": float(row.get("amount_share_pct", 0) or 0),
             "命中公司数": int(row.get("company_count", 0) or 0),
         })
+    return pd.DataFrame(rows)
+
+def _scenario_by_name(ranked):
+    return {
+        str(scenario.get("name", "") or "").strip(): scenario
+        for scenario in ranked or []
+        if str(scenario.get("name", "") or "").strip()
+    }
+
+def _account_display_text(account_code, description):
+    account_code = str(account_code or "").strip()
+    description = str(description or "").strip()
+    if account_code and description:
+        return f"{account_code} {description}"
+    return account_code or description
+
+def _detail_sampling_group(scenario_name, account_code, description, detail):
+    label = single_subscenario_label_for_detail(scenario_name, account_code, description, detail)
+    if scenario_name == "采购发票校验":
+        return "采购发票校验"
+    if scenario_name == "销售发票校验":
+        return "销售发票校验"
+    if scenario_name == "销售发货":
+        return "销售发货成本过账"
+    if scenario_name == "销售成本结转":
+        return "销售成本结转"
+    if scenario_name == "生产领料":
+        return label.replace("库存转出", "生产领用")
+    if scenario_name == "完工入库" and label == "生产成本完工转出":
+        return "__COMMON_COMPLETION_CLEARING__"
+    if scenario_name == "采购收货" and label == "GR/IR 暂估":
+        return "__COMMON_GRIR__"
+    return label
+
+def _new_matrix_row(ac_id, scenario_name, group_name):
+    return {
+        "AC编号": ac_id,
+        "审计场景": scenario_name,
+        "流程分类": process_group_for_scenario(scenario_name),
+        "抽样子场景": group_name,
+        "借方科目": set(),
+        "贷方科目": set(),
+        "借贷双方科目": set(),
+        "KTOSL": set(),
+        "KOMOK": set(),
+        "配置状态": "已配置",
+        "抽样说明": "按该子场景的借贷方科目关系选取样本，并核对凭证是否按 T030 自动过账配置生成。",
+    }
+
+def _add_account_to_matrix_row(row, account_text, direction):
+    direction = str(direction or "").strip()
+    if not account_text:
+        return
+    if direction == "借贷双方":
+        row["借方科目"].add(account_text)
+        row["贷方科目"].add(account_text)
+        row["借贷双方科目"].add(account_text)
+    elif "借" in direction:
+        row["借方科目"].add(account_text)
+    elif "贷" in direction:
+        row["贷方科目"].add(account_text)
+    else:
+        row["借贷双方科目"].add(account_text)
+
+def _append_detail_to_matrix(row, detail):
+    account_code = clean_account_code(detail.get("account"))
+    description = str(detail.get("description", "") or "").strip()
+    account_text = _account_display_text(account_code, description)
+    _add_account_to_matrix_row(row, account_text, detail.get("direction"))
+    for item in split_meta_values(detail.get("ktosl")):
+        row["KTOSL"].add(item)
+    for item in split_meta_values(detail.get("komok")):
+        row["KOMOK"].add(item)
+
+def _finalize_matrix_row(row):
+    finalized = dict(row)
+    for key in ["借方科目", "贷方科目", "借贷双方科目", "KTOSL", "KOMOK"]:
+        values = sorted(str(value) for value in finalized.get(key, set()) if str(value).strip())
+        finalized[key] = "；".join(values) if values else "待补充"
+    return finalized
+
+def _scenario_has_config(scenario):
+    if not scenario:
+        return False
+    if scenario.get("account_details"):
+        return True
+    if scenario.get("raw_accounts") or scenario.get("accounts") or scenario.get("amount_accounts"):
+        return True
+    return False
+
+def build_ac_subscenario_debit_credit_table(ranked):
+    scenario_map = _scenario_by_name(ranked)
+    rows = []
+
+    for scenario_name in CORE_AC_SCENARIOS:
+        ac_id = AC_SCENARIO_NUMBERS.get(scenario_name, "")
+        scenario = scenario_map.get(scenario_name, {})
+        details = [detail for detail in scenario.get("account_details", []) or [] if clean_account_code(detail.get("account"))]
+        if not details:
+            rows.append({
+                "AC编号": ac_id,
+                "审计场景": scenario_name,
+                "流程分类": process_group_for_scenario(scenario_name),
+                "抽样子场景": "待补充",
+                "借方科目": "待补充",
+                "贷方科目": "待补充",
+                "借贷双方科目": "待补充",
+                "KTOSL": "待补充",
+                "KOMOK": "待补充",
+                "配置状态": "待补充配置" if not _scenario_has_config(scenario) else "待补充借贷方",
+                "抽样说明": "当前场景尚未形成明确借贷方科目，请检查 T030/SKAT 配置或补充该 AC 的规则。",
+            })
+            continue
+
+        grouped = {}
+        common_grir = []
+        common_completion = []
+        for detail in details:
+            account_code = clean_account_code(detail.get("account"))
+            description = str(detail.get("description", "") or "").strip()
+            group_name = _detail_sampling_group(scenario_name, account_code, description, detail)
+            if group_name == "__COMMON_GRIR__":
+                common_grir.append(detail)
+                continue
+            if group_name == "__COMMON_COMPLETION_CLEARING__":
+                common_completion.append(detail)
+                continue
+            row = grouped.setdefault(group_name, _new_matrix_row(ac_id, scenario_name, group_name))
+            _append_detail_to_matrix(row, detail)
+
+        if scenario_name == "采购收货" and common_grir and grouped:
+            for row in grouped.values():
+                for detail in common_grir:
+                    _append_detail_to_matrix(row, detail)
+        elif scenario_name == "采购收货" and common_grir:
+            row = grouped.setdefault("采购收货-GR/IR暂估", _new_matrix_row(ac_id, scenario_name, "采购收货-GR/IR暂估"))
+            for detail in common_grir:
+                _append_detail_to_matrix(row, detail)
+
+        if scenario_name == "完工入库" and common_completion and grouped:
+            for row in grouped.values():
+                for detail in common_completion:
+                    _append_detail_to_matrix(row, detail)
+        elif scenario_name == "完工入库" and common_completion:
+            row = grouped.setdefault("生产成本完工转出", _new_matrix_row(ac_id, scenario_name, "生产成本完工转出"))
+            for detail in common_completion:
+                _append_detail_to_matrix(row, detail)
+
+        for row in grouped.values():
+            rows.append(_finalize_matrix_row(row))
+
     return pd.DataFrame(rows)
 
 def build_account_quantity_coverage(ranked, trial_balance_df):
@@ -1586,6 +1856,125 @@ def render_account_quantity_coverage(ranked):
     else:
         st.warning("当前科目数量覆盖率低于 90%。可补充固定资产、税费、人工、费用分摊等场景规则，或检查客户科目描述和配置表完整性。")
 
+def automation_account_count(ranked):
+    accounts = set()
+    for scenario in ranked or []:
+        for detail in scenario.get("account_details", []) or []:
+            code = clean_account_code(detail.get("account"))
+            if code:
+                accounts.add(code)
+        for account in scenario.get("amount_accounts") or scenario.get("raw_accounts") or []:
+            code = clean_account_code(account)
+            if code:
+                accounts.add(code)
+        for account_label in scenario.get("accounts", []) or []:
+            code = clean_account_code(str(account_label).split(" ")[0])
+            if code:
+                accounts.add(code)
+    return len(accounts)
+
+def render_pre_generation_overview_dashboard(ranked):
+    if not ranked:
+        return
+
+    st.markdown("### 生成底稿前总览看板")
+    st.caption("在生成 AC 底稿前快速确认自动化凭证场景、自动化科目覆盖、重要账户和抽样配置范围。")
+
+    tb_coverage = build_account_quantity_coverage(ranked, load_session_table("TrialBalance"))
+    coverage_df = build_scenario_coverage_items(ranked)
+    materiality_default = float(st.session_state.audit_context.get("materiality_amount", 0) or 0)
+    materiality_amount = st.number_input(
+        "重要性水平（用于筛选重要账户）",
+        min_value=0.0,
+        value=materiality_default,
+        step=10000.0,
+        format="%.2f",
+        key="pre_generation_materiality_amount",
+        help="输入本项目重要性水平后，下方会列出金额超过该水平的自动化凭证相关账户。",
+    )
+    st.session_state.audit_context["materiality_amount"] = materiality_amount
+
+    ledger_summary = {}
+    if st.session_state.get("ledger_ready"):
+        ledger_analysis_df = ensure_ledger_analysis_current(ranked)
+        if not ledger_analysis_df.empty:
+            ledger_summary = build_ledger_coverage_summary(ledger_analysis_df)
+
+    automated_account_count = automation_account_count(ranked)
+    ac_matrix_df = build_ac_subscenario_debit_credit_table(ranked)
+    configured_ac_count = 0
+    if not ac_matrix_df.empty:
+        configured_ac_count = int(
+            ac_matrix_df[ac_matrix_df["配置状态"].eq("已配置")]["审计场景"].nunique()
+        )
+    extra_scenarios = sorted(
+        str(scenario.get("name", "") or "").strip()
+        for scenario in ranked or []
+        if str(scenario.get("name", "") or "").strip()
+        and str(scenario.get("name", "") or "").strip() not in CORE_AC_SCENARIOS
+    )
+    if tb_coverage:
+        account_ratio_text = f"{tb_coverage['coverage_pct']:.2f}%"
+        total_account_text = f"{tb_coverage['total_accounts']:,}"
+    else:
+        account_ratio_text = "待上传余额/发生额表"
+        total_account_text = "待补充"
+
+    important_df = pd.DataFrame()
+    if not coverage_df.empty:
+        important_df = coverage_df[coverage_df["金额"].abs() >= float(materiality_amount)].copy()
+        important_df = important_df.sort_values("金额", ascending=False)
+    important_account_count = int(important_df["科目编码"].nunique()) if not important_df.empty else 0
+    important_amount = float(important_df["金额"].sum()) if not important_df.empty else 0.0
+
+    metric_cols = st.columns(6)
+    metric_cols[0].metric("10个AC覆盖", f"{configured_ac_count}/{len(CORE_AC_SCENARIOS)}")
+    metric_cols[1].metric("自动化科目数量", f"{automated_account_count:,}")
+    metric_cols[2].metric("科目数量占比", account_ratio_text, help=f"科目余额/发生额表科目总数：{total_account_text}")
+    metric_cols[3].metric("自动化凭证数量", f"{int(ledger_summary.get('automated_vouchers', 0)):,}" if ledger_summary else "待上传序时账")
+    metric_cols[4].metric("重要账户数量", f"{important_account_count:,}")
+    metric_cols[5].metric("重要账户金额", f"{important_amount:,.2f}")
+
+    if extra_scenarios:
+        st.caption(f"补充场景：{'、'.join(extra_scenarios)}。补充场景不计入本次 10 个 AC 覆盖口径。")
+
+    if not ac_matrix_df.empty:
+        with st.expander("10 个 AC 场景借贷方配置", expanded=True):
+            st.caption("每行代表一个可抽样子场景；采购收货、完工入库等共同清账/结转科目已并入对应业务子场景，便于直接生成抽样配置场景表。")
+            st.dataframe(ac_matrix_df, width="stretch", hide_index=True)
+            st.download_button(
+                "导出 10 个 AC 抽样场景借贷方配置",
+                data=dataframe_to_excel_bytes(ac_matrix_df, "AC借贷方配置"),
+                file_name="AC_Subscenario_Debit_Credit_Config.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                width="stretch",
+            )
+
+    if coverage_df.empty:
+        st.info("当前尚未形成金额口径的账户明细。上传余额/发生额表后，可按重要性水平筛选重要账户。")
+        return
+
+    if important_df.empty:
+        st.info("当前没有金额超过重要性水平的自动化凭证账户；可调整重要性水平或检查余额/发生额表。")
+    else:
+        display_cols = [
+            "流程分类", "审计场景", "子场景标签", "配置借贷方", "KTOSL", "KOMOK",
+            "科目编码", "科目描述", "金额", "占整体", "占场景", "命中公司数",
+        ]
+        important_display = important_df[display_cols].head(50).copy()
+        important_display["金额"] = important_display["金额"].map(lambda value: f"{float(value):,.2f}")
+        important_display["占整体"] = important_display["占整体"].map(lambda value: f"{float(value):.2f}%")
+        important_display["占场景"] = important_display["占场景"].map(lambda value: f"{float(value):.2f}%")
+        st.markdown("**超过重要性水平的重要账户明细**")
+        st.dataframe(important_display, width="stretch", hide_index=True)
+        st.download_button(
+            "📥 导出重要账户明细",
+            data=dataframe_to_excel_bytes(important_df, "重要账户明细"),
+            file_name="Important_Automated_Accounts.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+
 def current_ledger_analysis_signature():
     return (
         st.session_state.get("ledger_signature"),
@@ -1630,7 +2019,7 @@ def build_important_ledger_account_details(analysis_df, limit=10):
     if display_df.empty:
         return pd.DataFrame()
     df = display_df.copy()
-    for col in ["场景匹配状态", "自动化场景", "科目编码", "科目描述", "借贷方向", "凭证号", "金额"]:
+    for col in ["场景匹配状态", "自动化场景", "自动化子场景", "科目编码", "科目描述", "借贷方向", "凭证号", "金额"]:
         if col not in df.columns:
             df[col] = "" if col != "金额" else 0.0
     df["金额"] = pd.to_numeric(df["金额"], errors="coerce").fillna(0.0)
@@ -1642,7 +2031,7 @@ def build_important_ledger_account_details(analysis_df, limit=10):
         return pd.DataFrame()
     total_amount = float(automated_df["金额"].sum())
     grouped = (
-        automated_df.groupby(["自动化场景", "科目编码", "科目描述", "借贷方向"], dropna=False, as_index=False)
+        automated_df.groupby(["自动化场景", "自动化子场景", "科目编码", "科目描述", "借贷方向"], dropna=False, as_index=False)
         .agg(凭证行数=("凭证号", "count"), 凭证数=("凭证号", "nunique"), 金额=("金额", "sum"))
         .sort_values("金额", ascending=False)
         .head(limit)
@@ -1999,6 +2388,27 @@ def render_testing_coverage_dashboard(ranked):
     }) if not selected_df.empty else 0
     achieved_target = selected_pct >= target_pct
     gap_amount = max(target_amount - selected_amount, 0.0)
+
+    export_config_cols = st.columns([1.2, 1.2, 2.6])
+    with export_config_cols[0]:
+        st.download_button(
+            "📥 导出已勾选抽样配置",
+            data=dataframe_to_excel_bytes(selected_df, "已勾选抽样配置"),
+            file_name="Selected_Sampling_Config.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+            disabled=selected_df.empty,
+        )
+    with export_config_cols[1]:
+        st.download_button(
+            "📥 一键导出全部配置",
+            data=dataframe_to_excel_bytes(coverage_df, "全部抽样配置"),
+            file_name="All_Sampling_Config.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+    with export_config_cols[2]:
+        st.caption("导出的抽样配置场景表包含流程、场景、子场景、配置借贷方、KTOSL/KOMOK、科目、金额、占比和命中公司数，可直接作为后续抽样范围依据。")
 
     process_stats = (
         coverage_df.groupby("流程分类", as_index=False)
@@ -3060,6 +3470,96 @@ elif st.session_state.current_step == 3:
             go_to_step(2)
         st.stop()
 
+    st.subheader("步骤 3: 全量实质性测试覆盖 Dashboard")
+    st.caption("本步骤仅使用第一步项目资料包中已识别的文件，不再提供补充上传或样本编辑入口。")
+    render_project_folder_status()
+
+    with st.expander("查看项目资料包自动识别结果", expanded=True):
+        manifest = st.session_state.get("project_folder_manifest") or []
+        if manifest:
+            manifest_df = pd.DataFrame(manifest)
+            display_cols = [col for col in ["文件", "识别类型", "状态", "原因"] if col in manifest_df.columns]
+            st.dataframe(manifest_df[display_cols] if display_cols else manifest_df, width="stretch", hide_index=True)
+        else:
+            st.warning("未发现第一步项目资料包识别结果。请返回第一步选择项目文件夹后再进入本步骤。")
+
+    ensure_scenario_preview_current()
+    ledger_analysis_df = render_full_ledger_testing_dashboard(st.session_state.scenario_preview)
+    if ledger_analysis_df.empty:
+        st.info("当前未形成全量序时账覆盖 Dashboard。请确认第一步项目资料包中包含全量序时账/凭证明细或全量覆盖清单。")
+
+    st.write("---")
+    nav_cols = st.columns([1, 1.5, 1.5, 1])
+    with nav_cols[1]:
+        if st.button("返回上一步", width="stretch", key="simple_step3_back"):
+            go_to_step(2)
+    with nav_cols[2]:
+        final_sample_records = st.session_state.sample_table_records + st.session_state.ocr_samples
+        has_ledger_analysis = bool(st.session_state.get("ledger_analysis_records"))
+        btn_disabled = not final_sample_records and not has_ledger_analysis
+        if btn_disabled:
+            st.caption("请先在第一步项目资料包中包含样本清单、凭证截图或全量序时账/覆盖清单。")
+        if st.button("🚀 生成最终底稿", width="stretch", key="simple_generate_report", disabled=btn_disabled):
+            with st.spinner("正在基于第一步项目资料包生成最终底稿..."):
+                c1 = Core1Orchestrator(SESSION_DATA_DIR)
+                ranked = c1.run()
+                sample_columns = ["SCENARIO", "DOC_NUM", "COMPANY_CODE", "SAKNR", "TXT50", "MATNR", "AMOUNT", "SHKZG", "DATE", "KTOSL", "KOMOK"]
+                lines = []
+                for s in final_sample_records:
+                    scenario = str(s.get("SCENARIO") or "").strip()
+                    if not scenario or scenario == AUTO_SCENARIO_LABEL:
+                        scenario = str(s.get("AUTO_SCENARIO") or "").strip()
+                    lines.append({
+                        "SCENARIO": scenario,
+                        "DOC_NUM": s.get("DOC_NUM"),
+                        "COMPANY_CODE": s.get("COMPANY_CODE"),
+                        "SAKNR": s.get("SAKNR"),
+                        "TXT50": s.get("TXT50"),
+                        "MATNR": s.get("MATNR"),
+                        "AMOUNT": s.get("AMOUNT"),
+                        "SHKZG": s.get("SHKZG", "S"),
+                        "DATE": s.get("DATE") or "2026-06-01",
+                        "KTOSL": s.get("KTOSL"),
+                        "KOMOK": s.get("KOMOK"),
+                    })
+                s_df = pd.DataFrame(lines, columns=sample_columns)
+                s_df = Core2Orchestrator.normalize_samples_dataframe(s_df)
+                for col in sample_columns:
+                    if col not in s_df.columns:
+                        s_df[col] = ""
+                s_df = s_df[sample_columns]
+                s_df.to_csv(os.path.join(SESSION_DATA_DIR, "Samples.csv"), index=False, encoding="utf-8-sig")
+
+                if not s_df.empty:
+                    validation_df = validate_voucher_t030_logic(
+                        s_df,
+                        load_session_table("T030"),
+                        load_session_table("T001K"),
+                        st.session_state.mm03_records,
+                        load_session_table("MARC"),
+                    )
+                    st.session_state.voucher_validation_records = validation_df.to_dict("records") if not validation_df.empty else []
+
+                c2 = Core2Orchestrator(SESSION_DATA_DIR)
+                if DEFAULT_KEY:
+                    from llm_client import LLMClient
+                    c2.llm_client = LLMClient(api_key=DEFAULT_KEY, model_name=selected_model)
+
+                audit_context = dict(st.session_state.audit_context)
+                audit_context["voucher_validation"] = st.session_state.voucher_validation_records
+                ledger_analysis_df = ensure_ledger_analysis_current(ranked)
+                if not ledger_analysis_df.empty:
+                    audit_context["full_ledger_summary"] = build_ledger_coverage_summary(ledger_analysis_df)
+                    audit_context["full_ledger_exceptions"] = build_exception_ledger(ledger_analysis_df).to_dict("records")
+                    audit_context["full_ledger_tagged"] = ledger_display_dataframe(ledger_analysis_df).to_dict("records")
+                di = c2.generate_di_descriptions(ranked, audit_context)
+                gen = ReportGenerator(SESSION_DATA_DIR)
+                path = gen.generate(ranked, di, audit_context)
+                st.session_state.results = {"ranked": ranked, "di": di, "report_path": path}
+                st.session_state.show_balloons = True
+                st.rerun()
+    st.stop()
+
     st.subheader("步骤 3: 全量实质性测试看板与样本证据采集")
     if is_s4_system():
         st.caption("SAP S/4 HANA：请上传已整理的全量序时账/ACDOCA 归集核对结果；原始 ACDOCA 明细过大时不建议直接上传。")
@@ -3116,6 +3616,7 @@ elif st.session_state.current_step == 3:
         st.info("余额/发生额表用于补充金额影响分析；是否按 T030 配置生成，以全量序时账、T001K、MARC/MM03 与 T030 的逐笔验证为准。")
 
     ensure_scenario_preview_current()
+    render_pre_generation_overview_dashboard(st.session_state.scenario_preview)
     render_full_ledger_testing_dashboard(st.session_state.scenario_preview)
     render_account_quantity_coverage(st.session_state.scenario_preview)
     render_general_audit_dashboard(st.session_state.scenario_preview)

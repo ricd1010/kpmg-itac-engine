@@ -107,3 +107,43 @@ def test_analyze_ledger_exports_unmatched_accounts_as_exceptions():
     assert result.iloc[0]["SCENARIO_MATCH_STATUS"] == "无法匹配自动化场景"
     assert result.iloc[0]["SUBSTANTIVE_TEST_STATUS"] == "未完成实质性测试"
     assert exceptions.iloc[0]["异常类型"] == "无法匹配自动化场景"
+
+
+def test_ledger_coverage_list_scenarios_override_t030_name_rules():
+    ledger = pd.DataFrame([
+        {
+            "DOC_NUM": "9200000001",
+            "COMPANY_CODE": "4390",
+            "SAKNR": "1405999999",
+            "TXT50": "产成品差异",
+            "MATNR": "MAT7900055",
+            "AMOUNT": "265260.33",
+            "SHKZG": "S",
+            "KTOSL": "AUM",
+            "SCENARIO_L1": "库存转储差异",
+            "SCENARIO_L2": "转储/物料差异 AUM",
+            "CONFIG_COVERED_FLAG": "Y",
+        },
+        {
+            "DOC_NUM": "9200000002",
+            "COMPANY_CODE": "4390",
+            "SAKNR": "9999999999",
+            "TXT50": "未覆盖科目",
+            "AMOUNT": "100",
+            "SHKZG": "S",
+            "CONFIG_COVERED_FLAG": "N",
+        },
+    ])
+
+    result = analyze_ledger(ledger, [])
+    display_df = build_exception_ledger(result)
+    summary = build_ledger_coverage_summary(result)
+
+    assert result.iloc[0]["SCENARIO"] == "库存转储差异"
+    assert result.iloc[0]["SUB_SCENARIO"] == "转储/物料差异 AUM"
+    assert result.iloc[0]["CONFIG_VALIDATION_STATUS"] == "配置逻辑通过"
+    assert result.iloc[0]["SUBSTANTIVE_TEST_STATUS"] == "已完成实质性测试"
+    assert result.iloc[1]["SCENARIO_MATCH_STATUS"] == "无法匹配自动化场景"
+    assert summary["automated_lines"] == 1
+    assert summary["covered_lines"] == 1
+    assert display_df.iloc[0]["异常类型"] == "无法匹配自动化场景"

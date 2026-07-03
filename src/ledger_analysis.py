@@ -9,6 +9,11 @@ LEDGER_BASE_COLUMNS = [
     "WERKS", "AMOUNT", "SHKZG", "KTOSL", "KOMOK",
 ]
 
+LEDGER_COVERAGE_COLUMNS = [
+    "SCENARIO_L1", "SCENARIO_L2", "CONFIG_COVERED_FLAG", "SPA_TEST_POINT",
+    "T030_CONFIG_ROW_ID", "T030_VALUATION_GROUP", "T030_VALUATION_CLASS",
+]
+
 
 def _clean_text(value):
     try:
@@ -59,13 +64,26 @@ def _split_meta(value):
     return set(parts)
 
 
+def _flag_is_positive(value):
+    return _clean_text(value).upper() in {"Y", "YES", "TRUE", "1", "是", "已覆盖", "COVERED"}
+
+
+def _ledger_has_scenario_list(ledger):
+    if ledger is None or ledger.empty:
+        return False
+    return (
+        "SCENARIO_L1" in ledger.columns
+        and ledger["SCENARIO_L1"].astype(str).str.strip().replace({"nan": "", "None": ""}).ne("").any()
+    )
+
+
 def normalize_ledger_dataframe(df):
     if df is None or not hasattr(df, "empty") or df.empty:
         return pd.DataFrame(columns=LEDGER_BASE_COLUMNS + ["AMT_SIGNED", "AMT_ABS", "SAKNR_CLEAN", "DIRECTION"])
 
     normalized = df.copy()
     normalized.columns = [str(col).strip().upper() for col in normalized.columns]
-    for col in LEDGER_BASE_COLUMNS:
+    for col in LEDGER_BASE_COLUMNS + LEDGER_COVERAGE_COLUMNS:
         if col not in normalized.columns:
             normalized[col] = ""
 
@@ -89,6 +107,13 @@ def normalize_ledger_dataframe(df):
             "DIRECTION": _direction_label(direction),
             "KTOSL": _clean_text(row.get("KTOSL")).upper(),
             "KOMOK": _clean_text(row.get("KOMOK")).upper(),
+            "SCENARIO_L1": _clean_text(row.get("SCENARIO_L1")),
+            "SCENARIO_L2": _clean_text(row.get("SCENARIO_L2")),
+            "CONFIG_COVERED_FLAG": _clean_text(row.get("CONFIG_COVERED_FLAG")).upper(),
+            "SPA_TEST_POINT": _clean_text(row.get("SPA_TEST_POINT")),
+            "T030_CONFIG_ROW_ID": _clean_text(row.get("T030_CONFIG_ROW_ID")),
+            "T030_VALUATION_GROUP": _clean_text(row.get("T030_VALUATION_GROUP")),
+            "T030_VALUATION_CLASS": _clean_text(row.get("T030_VALUATION_CLASS")),
         })
     result = pd.DataFrame(rows)
     return result[
@@ -169,6 +194,24 @@ def classify_ledger_scenarios(ledger_df, ranked):
     ledger = normalize_ledger_dataframe(ledger_df)
     if ledger.empty:
         return ledger
+    if _ledger_has_scenario_list(ledger):
+        rows = []
+        for _, row in ledger.iterrows():
+            item = row.to_dict()
+            scenario_l1 = _clean_text(item.get("SCENARIO_L1"))
+            scenario_l2 = _clean_text(item.get("SCENARIO_L2"))
+            if scenario_l1:
+                item["SCENARIO"] = scenario_l1
+                item["SUB_SCENARIO"] = scenario_l2
+                item["SCENARIO_MATCH_STATUS"] = "自动化场景已匹配"
+                item["SCENARIO_MATCH_REASON"] = "来自全量覆盖清单 Scenario L1 / Scenario L2"
+            else:
+                item["SCENARIO"] = ""
+                item["SUB_SCENARIO"] = ""
+                item["SCENARIO_MATCH_STATUS"] = "无法匹配自动化场景"
+                item["SCENARIO_MATCH_REASON"] = "全量覆盖清单未提供 Scenario L1"
+            rows.append(item)
+        return pd.DataFrame(rows)
     rules_by_account = _build_scenario_rules(ranked)
     rows = []
     for _, row in ledger.iterrows():
@@ -202,6 +245,28 @@ def classify_ledger_scenarios(ledger_df, ranked):
 def analyze_ledger(ledger_df, ranked, t030_df=None, t001k_df=None, mm03_records=None, marc_df=None):
     tagged = classify_ledger_scenarios(ledger_df, ranked)
     if tagged.empty:
+        return tagged
+
+    if _ledger_has_scenario_list(tagged) and tagged["CONFIG_COVERED_FLAG"].astype(str).str.strip().ne("").any():
+        tagged = tagged.reset_index(drop=True)
+        matched = tagged["SCENARIO_MATCH_STATUS"].eq("自动化场景已匹配")
+        covered_flag = tagged["CONFIG_COVERED_FLAG"].apply(_flag_is_positive)
+        tagged["CONFIG_VALIDATION_STATUS"] = [
+            "配置逻辑通过" if is_matched and is_covered else ("配置逻辑不通过" if is_matched else "字段待补充")
+            for is_matched, is_covered in zip(matched, covered_flag)
+        ]
+        tagged["CONFIG_VALIDATION_NOTE"] = [
+            "来自全量覆盖清单 Config Covered Flag"
+            if is_matched and is_covered
+            else ("清单标记为未覆盖或未纳入 T030 覆盖" if is_matched else "全量覆盖清单缺少 Scenario L1")
+            for is_matched, is_covered in zip(matched, covered_flag)
+        ]
+        tagged["T030_EXPECTED_ACCOUNT"] = ""
+        tagged["SUBSTANTIVE_TEST_STATUS"] = [
+            "已完成实质性测试" if is_matched and is_covered else "未完成实质性测试"
+            for is_matched, is_covered in zip(matched, covered_flag)
+        ]
+        tagged["EXCEPTION_TYPE"] = tagged.apply(_exception_type, axis=1)
         return tagged
 
     validation_input = tagged.copy()
@@ -278,6 +343,7 @@ def ledger_display_dataframe(analysis_df):
         "SUBSTANTIVE_TEST_STATUS": "实质性测试状态",
         "EXCEPTION_TYPE": "异常类型",
         "SCENARIO": "自动化场景",
+        "SUB_SCENARIO": "自动化子场景",
         "SCENARIO_MATCH_STATUS": "场景匹配状态",
         "CONFIG_VALIDATION_STATUS": "配置验证结论",
         "DOC_NUM": "凭证号",
@@ -291,6 +357,7 @@ def ledger_display_dataframe(analysis_df):
         "AMT_ABS": "金额",
         "KTOSL": "事务",
         "KOMOK": "科目修改",
+        "CONFIG_COVERED_FLAG": "清单覆盖标志",
         "T030_EXPECTED_ACCOUNT": "T030期望科目",
         "CONFIG_VALIDATION_NOTE": "验证说明",
     }
@@ -371,7 +438,7 @@ def build_ledger_dashboard_tables(analysis_df):
     if display_df.empty:
         return {"scenario": pd.DataFrame(), "exception": pd.DataFrame()}
     scenario = (
-        display_df.groupby(["自动化场景", "实质性测试状态"], dropna=False, as_index=False)
+        display_df.groupby(["自动化场景", "自动化子场景", "实质性测试状态"], dropna=False, as_index=False)
         .agg(凭证行数=("凭证号", "count"), 金额=("金额", "sum"), 科目数=("科目编码", "nunique"))
         .sort_values("金额", ascending=False)
     )

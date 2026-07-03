@@ -84,6 +84,96 @@ def _parse_account_label(label):
     description = parts[1].strip("() ") if len(parts) > 1 else ""
     return account, description
 
+def _split_meta(value):
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    return {
+        item.strip().upper()
+        for item in re.split(r"\s*/\s*|[;,，；]+", text)
+        if item.strip()
+    }
+
+
+def _detail_lookup(scenario):
+    lookup = {}
+    for detail in _as_list(scenario.get("account_details")):
+        detail = _as_dict(detail)
+        account = _clean_code(detail.get("account"))
+        if account:
+            lookup[account] = detail
+    return lookup
+
+
+def _detail_value(detail, key):
+    return str(_as_dict(detail).get(key, "") or "").strip()
+
+
+def _inventory_category_label(account_code="", description="", suffix=""):
+    account_code = _clean_code(account_code)
+    text = f"{account_code} {description or ''}"
+    if "半成品" in text or account_code.startswith(("1409", "500102")):
+        return f"半成品{suffix}"
+    if any(word in text for word in ["库存商品", "产成品", "自制成品", "外购成品"]) or account_code.startswith(("1405", "500103")):
+        return f"产成品{suffix}"
+    if any(word in text for word in ["包装物", "周转材料"]) or account_code.startswith(("1410", "1411")):
+        return f"包装物/周转材料{suffix}"
+    if any(word in text for word in ["原材料", "原辅料", "材料"]) or account_code.startswith(("1403", "500101", "801705")):
+        return f"原辅料{suffix}"
+    return f"存货{suffix}"
+
+
+def _subscenario_label(scenario_name, account_code, description, detail):
+    scenario_name = str(scenario_name or "").strip()
+    account_code = _clean_code(account_code)
+    description = str(description or "")
+    ktosl_values = _split_meta(_detail_value(detail, "ktosl"))
+    komok_values = _split_meta(_detail_value(detail, "komok"))
+
+    if scenario_name == "采购收货":
+        if "WRX" in ktosl_values or "GR/IR" in description.upper():
+            return "GR/IR 暂估"
+        return _inventory_category_label(account_code, description, "采购入库")
+    if scenario_name == "采购发票校验":
+        if "WRX" in ktosl_values or "GR/IR" in description.upper():
+            return "GR/IR 清账"
+        if "VST" in ktosl_values or "进项" in description:
+            return "进项税确认"
+        return "应付入账"
+    if scenario_name == "销售发货":
+        return "销售发货消耗" if "GISS" in ktosl_values else "销售发货成本过账"
+    if scenario_name == "销售发票校验":
+        if "MWS" in ktosl_values:
+            return "销项税确认"
+        return "收入确认"
+    if scenario_name == "销售成本结转":
+        return "销售成本结转"
+    if scenario_name == "生产领料":
+        if "GBB" in ktosl_values:
+            return _inventory_category_label(account_code, description, "生产领用")
+        return _inventory_category_label(account_code, description, "库存转出")
+    if scenario_name == "完工入库":
+        if "AUF" in komok_values or account_code.startswith(("500108", "500109")):
+            return "生产成本完工转出"
+        if "半成品" in description or account_code.startswith("1409"):
+            return "半成品完工入库"
+        return "产成品完工入库"
+    if scenario_name == "工单差异":
+        if "转物料" in description or "物料转" in description:
+            return "物料转物料差异"
+        if "采购" in description:
+            return "采购差异"
+        if "产出" in description:
+            return "产出差异"
+        return "工单差异"
+    if scenario_name == "产成品差异":
+        return "物料转物料差异"
+    if scenario_name == "固定资产折旧":
+        return "累计折旧" if account_code.startswith("1602") else "折旧费用"
+    if scenario_name == "收款核销":
+        return "收款清账"
+    return scenario_name or "未分类子场景"
+
 
 def _build_t001k_lookup(t001k_df):
     lookup = {}
@@ -180,6 +270,7 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
         scenario_name = str(scenario.get("name", "")).strip()
         company_values = _as_list(scenario.get("company_values"))
         account_share_map = _scenario_account_share_map(scenario)
+        details = _detail_lookup(scenario)
 
         if company_values:
             for company_item in company_values:
@@ -196,6 +287,10 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                         "公司代码": company_code,
                         "T001K评估分组代码": valuation_group,
                         "审计场景": scenario_name,
+                        "子场景": scenario_name or "未分类子场景",
+                        "配置借贷方": "",
+                        "KTOSL": "",
+                        "KOMOK": "",
                         "科目编码": "",
                         "科目描述": "该公司最后期间未命中此场景科目",
                         "科目金额": 0.0,
@@ -208,12 +303,18 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 for account in account_values:
                     account = _as_dict(account)
                     account_code = _clean_code(account.get("account"))
+                    description = str(account.get("description") or "")
+                    detail = details.get(account_code, {})
                     rows.append({
                         "公司代码": company_code,
                         "T001K评估分组代码": valuation_group,
                         "审计场景": scenario_name,
+                        "子场景": _subscenario_label(scenario_name, account_code, description, detail),
+                        "配置借贷方": _detail_value(detail, "direction"),
+                        "KTOSL": _detail_value(detail, "ktosl"),
+                        "KOMOK": _detail_value(detail, "komok"),
                         "科目编码": account_code,
-                        "科目描述": str(account.get("description") or ""),
+                        "科目描述": description,
                         "科目金额": _as_float(account.get("total_value")),
                         "占比": _format_pct(account_share_map.get(account_code, 0.0)),
                         "场景金额": scenario_amount,
@@ -227,6 +328,10 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
                 "公司代码": "",
                 "T001K评估分组代码": "",
                 "审计场景": scenario_name,
+                "子场景": scenario_name or "未分类子场景",
+                "配置借贷方": "",
+                "KTOSL": "",
+                "KOMOK": "",
                 "科目编码": "",
                 "科目描述": "未识别到关联科目",
                 "科目金额": 0.0,
@@ -239,10 +344,15 @@ def build_sampling_scenario_table(ranked_scenarios, t001k_df=None, mm03_image_na
 
         for account_label in accounts:
             account_code, description = _parse_account_label(account_label)
+            detail = details.get(account_code, {})
             rows.append({
                 "公司代码": "",
                 "T001K评估分组代码": "",
                 "审计场景": scenario_name,
+                "子场景": _subscenario_label(scenario_name, account_code, description, detail),
+                "配置借贷方": _detail_value(detail, "direction"),
+                "KTOSL": _detail_value(detail, "ktosl"),
+                "KOMOK": _detail_value(detail, "komok"),
                 "科目编码": account_code,
                 "科目描述": description,
                 "科目金额": 0.0,

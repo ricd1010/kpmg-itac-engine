@@ -1,0 +1,12 @@
+2026-06-29 16:40:29.482 Uvicorn server started on localhost:8502
+2026-06-29 16:42:36.931 Please replace `st.components.v1.html` with `st.iframe`.
+
+`st.components.v1.html` will be removed after 2026-06-01.
+2026-06-29 16:49:40.397 Please replace `st.components.v1.html` with `st.iframe`.
+
+`st.components.v1.html` will be removed after 2026-06-01.
+Using CPU. Note: This module is much faster with a GPU.
+C:\Users\Laptop\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\utils\data\dataloader.py:752: UserWarning: 'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.
+  super().__init__(loader)
+C:\Users\Laptop\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\utils\data\dataloader.py:752: UserWarning: 'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.
+  super().__init__(loader)

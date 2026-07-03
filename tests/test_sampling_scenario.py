@@ -50,6 +50,10 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
     assert row["公司代码"] == "4000"
     assert row["T001K评估分组代码"] == "4110"
     assert row["审计场景"] == "完工入库"
+    assert row["子场景"] == "生产成本完工转出"
+    assert row["配置借贷方"] == "贷方"
+    assert row["KTOSL"] == "GBB"
+    assert row["KOMOK"] == "AUF"
     assert row["科目编码"] == "5001080000"
     assert row["科目金额"] == 100.0
     assert row["占比"] == "100.00%"
@@ -61,9 +65,9 @@ def test_sampling_scenario_table_enriches_company_with_t001k():
     assert "MM03匹配截图" not in df.columns
     assert "MM03物料描述" not in df.columns
     assert "MM03价格控制" not in df.columns
-    assert "配置借贷方" not in df.columns
-    assert "事务码" not in df.columns
-    assert "科目修改" not in df.columns
+    assert "配置借贷方" in df.columns
+    assert "KTOSL" in df.columns
+    assert "KOMOK" in df.columns
     assert "T030评估分组" not in df.columns
     assert "评估类" not in df.columns
 
@@ -210,3 +214,57 @@ def test_sampling_scenario_table_account_share_uses_scenario_total():
     shares = dict(zip(df["科目编码"], df["占比"]))
     assert shares["1403010200"] == "80.00%"
     assert shares["1409030200"] == "20.00%"
+
+
+def test_sampling_scenario_table_splits_purchase_receipt_inventory_subscenarios():
+    account_details = [
+        {
+            "account": "1403000000",
+            "description": "原材料",
+            "direction": "借方",
+            "ktosl": "BSX",
+            "komok": "",
+        },
+        {
+            "account": "1409010000",
+            "description": "半成品-自制",
+            "direction": "借方",
+            "ktosl": "BSX",
+            "komok": "",
+        },
+        {
+            "account": "1405020000",
+            "description": "库存商品-自制成品",
+            "direction": "借方",
+            "ktosl": "BSX",
+            "komok": "",
+        },
+        {
+            "account": "2202040000",
+            "description": "应付账款-GR/IR",
+            "direction": "贷方",
+            "ktosl": "WRX",
+            "komok": "",
+        },
+    ]
+    ranked = [{
+        "name": "采购收货",
+        "account_details": account_details,
+        "company_values": [{
+            "company_code": "4000",
+            "total_value": 1_000.0,
+            "account_values": [
+                {"account": item["account"], "description": item["description"], "total_value": 250.0}
+                for item in account_details
+            ],
+        }],
+    }]
+
+    df = build_sampling_scenario_table(ranked)
+
+    labels = dict(zip(df["科目编码"], df["子场景"]))
+    assert labels["1403000000"] == "原辅料采购入库"
+    assert labels["1409010000"] == "半成品采购入库"
+    assert labels["1405020000"] == "产成品采购入库"
+    assert labels["2202040000"] == "GR/IR 暂估"
+    assert "存货入库" not in set(labels.values())

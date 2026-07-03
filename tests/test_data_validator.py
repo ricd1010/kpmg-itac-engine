@@ -364,3 +364,25 @@ def test_ledger_maps_full_journal_headers(tmp_path):
     assert df.iloc[0]["COMPANY_CODE"] == "4000"
     assert df.iloc[0]["DOC_NUM"] == "900001"
     assert df.iloc[0]["WERKS"] == "4110"
+
+
+def test_ledger_maps_full_coverage_list_headers_without_collapsing_scenarios(tmp_path):
+    ledger_path = tmp_path / "SAP_ledger_T030_coverage.csv"
+    ledger_path.write_text(
+        "Company Code,Document Number,Posting Date,G/L Account,G/L Account Name,"
+        "Amount in Local Currency,Debit/Credit Indicator,T030 Transaction Key,"
+        "Scenario L1,Scenario L2,Config Covered Flag\n"
+        "4390,9200000001,2026-01-03,1405999999,产成品差异,265260.33,S,AUM,"
+        "库存转储差异,转储/物料差异 AUM,Y\n",
+        encoding="utf-8-sig",
+    )
+
+    ok, msg, df = DataValidator.validate_file(MockUpload(ledger_path), "Ledger")
+
+    assert ok, msg
+    assert "SCENARIO_L1" in df.columns
+    assert "SCENARIO_L2" in df.columns
+    assert "CONFIG_COVERED_FLAG" in df.columns
+    assert "SCENARIO" not in df.columns
+    assert df.iloc[0]["TXT50"] == "产成品差异"
+    assert df.iloc[0]["AMOUNT"] == 265260.33
